@@ -21,8 +21,8 @@ pub enum McpCommands {
 pub async fn execute(args: &McpArgs, db_path: &str, ollama_url: &str) -> Result<()> {
     match args.command {
         McpCommands::Serve => {
-            let db = Database::open(std::path::Path::new(db_path))
-                .context("failed to open database")?;
+            let db =
+                Database::open(std::path::Path::new(db_path)).context("failed to open database")?;
             crate::mcp::server::serve(db, ollama_url).await
         }
     }

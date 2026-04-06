@@ -92,11 +92,14 @@ pub enum ContextCommands {
 }
 
 pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Result<()> {
-    let db = Database::open(std::path::Path::new(db_path))
-        .context("failed to open database")?;
+    let db = Database::open(std::path::Path::new(db_path)).context("failed to open database")?;
 
     match &args.command {
-        ContextCommands::List { namespace, limit, json } => {
+        ContextCommands::List {
+            namespace,
+            limit,
+            json,
+        } => {
             let conn = db.conn();
             let entries = db::context::list_context(&conn, namespace.as_deref(), *limit)
                 .context("failed to list context")?;
@@ -119,10 +122,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
                 println!("No context entries.");
             } else {
                 for entry in &entries {
-                    let by = entry
-                        .created_by
-                        .as_deref()
-                        .unwrap_or("manual");
+                    let by = entry.created_by.as_deref().unwrap_or("manual");
                     println!(
                         "  {} [{}] ({} bytes, by {})",
                         entry.key,
@@ -136,8 +136,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
 
         ContextCommands::Get { key, json } => {
             let conn = db.conn();
-            let entry = db::context::get_context(&conn, key)
-                .context("failed to get context")?;
+            let entry = db::context::get_context(&conn, key).context("failed to get context")?;
 
             match entry {
                 Some(e) => {
@@ -160,12 +159,18 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
             }
         }
 
-        ContextCommands::Set { key, content, namespace } => {
+        ContextCommands::Set {
+            key,
+            content,
+            namespace,
+        } => {
             let text = match content {
                 Some(c) => c.clone(),
                 None => {
                     if atty::is(atty::Stream::Stdin) {
-                        anyhow::bail!("no content provided. Pass content as argument or pipe to stdin.");
+                        anyhow::bail!(
+                            "no content provided. Pass content as argument or pipe to stdin."
+                        );
                     }
                     let mut buf = String::new();
                     std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
@@ -179,7 +184,12 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
             eprintln!("set context '{key}' ({} bytes)", text.len());
         }
 
-        ContextCommands::Search { query, top_k, embed_model, json } => {
+        ContextCommands::Search {
+            query,
+            top_k,
+            embed_model,
+            json,
+        } => {
             let client = OllamaClient::new(ollama_url);
             let embeddings = client
                 .embed(embed_model, std::slice::from_ref(query))
@@ -219,8 +229,8 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
 
         ContextCommands::Delete { key } => {
             let conn = db.conn();
-            let deleted = db::context::delete_context(&conn, key)
-                .context("failed to delete context")?;
+            let deleted =
+                db::context::delete_context(&conn, key).context("failed to delete context")?;
             if deleted {
                 eprintln!("deleted context '{key}'");
             } else {

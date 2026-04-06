@@ -228,12 +228,11 @@ impl LlmClient for OllamaClient {
 
     async fn ping(&self) -> Result<(), LlmError> {
         let url = format!("{}/api/version", self.base_url);
-        self.client.get(&url).send().await.map_err(|e| {
-            LlmError::Unreachable {
-                url,
-                source: e,
-            }
-        })?;
+        self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| LlmError::Unreachable { url, source: e })?;
         Ok(())
     }
 

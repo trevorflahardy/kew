@@ -1,5 +1,6 @@
 //! CLI command definitions using clap derive macros.
 
+pub mod agent;
 pub mod chain;
 pub mod context;
 pub mod doctor;
@@ -19,7 +20,12 @@ pub struct Cli {
     pub db: Option<String>,
 
     /// Ollama API URL
-    #[arg(long, global = true, default_value = "http://localhost:11434", env = "KEW_OLLAMA_URL")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "http://localhost:11434",
+        env = "KEW_OLLAMA_URL"
+    )]
     pub ollama_url: String,
 
     /// Anthropic API key (for Claude models)
@@ -56,4 +62,7 @@ pub enum Commands {
 
     /// Check system health
     Doctor(doctor::DoctorArgs),
+
+    /// List, inspect, and manage agent configurations
+    Agent(agent::AgentArgs),
 }

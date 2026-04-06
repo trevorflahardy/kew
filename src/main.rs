@@ -3,6 +3,7 @@
 //! A single binary that spawns real LLM agents (Ollama, Claude API),
 //! coordinates them via SQLite, and learns from past work.
 
+pub mod agents;
 pub mod cli;
 pub mod db;
 pub mod llm;
@@ -38,16 +39,21 @@ async fn main() {
     });
 
     let result = match cli.command {
-        Commands::Run(ref args) => cli::run::execute(args, &db_path, &cli.ollama_url, cli.claude_key.as_deref()).await,
+        Commands::Run(ref args) => {
+            cli::run::execute(args, &db_path, &cli.ollama_url, cli.claude_key.as_deref()).await
+        }
         Commands::Init(ref args) => {
             // Init is synchronous
             cli::init::execute(args)
         }
-        Commands::Chain(ref args) => cli::chain::execute(args, &db_path, &cli.ollama_url, cli.claude_key.as_deref()).await,
+        Commands::Chain(ref args) => {
+            cli::chain::execute(args, &db_path, &cli.ollama_url, cli.claude_key.as_deref()).await
+        }
         Commands::Context(ref args) => cli::context::execute(args, &db_path, &cli.ollama_url).await,
         Commands::Mcp(ref args) => cli::mcp::execute(args, &db_path, &cli.ollama_url).await,
         Commands::Status(ref args) => cli::status::execute(args, &db_path),
         Commands::Doctor(_) => cli::doctor::execute(&cli.ollama_url, &db_path).await,
+        Commands::Agent(ref args) => cli::agent::execute(args),
     };
 
     if let Err(e) = result {
@@ -59,8 +65,7 @@ async fn main() {
 /// Default database path: ~/.local/share/kew/kew.db
 fn dirs_default_db() -> String {
     if let Some(home) = std::env::var_os("HOME") {
-        let path = std::path::PathBuf::from(home)
-            .join(".local/share/kew/kew.db");
+        let path = std::path::PathBuf::from(home).join(".local/share/kew/kew.db");
         return path.to_string_lossy().to_string();
     }
     ".kew/kew.db".to_string()

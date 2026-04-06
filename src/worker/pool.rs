@@ -209,7 +209,9 @@ mod tests {
                 chain_index: None,
             };
             let _task = tasks::create_task(&conn, &new).unwrap();
-            let claimed = tasks::claim_next_pending(&conn, &format!("w-{i}")).unwrap().unwrap();
+            let claimed = tasks::claim_next_pending(&conn, &format!("w-{i}"))
+                .unwrap()
+                .unwrap();
             tasks_out.push(claimed);
         }
         tasks_out

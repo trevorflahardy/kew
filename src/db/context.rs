@@ -60,8 +60,10 @@ pub fn get_context_many(conn: &Connection, keys: &[String]) -> rusqlite::Result<
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn rusqlite::types::ToSql> =
-        keys.iter().map(|k| k as &dyn rusqlite::types::ToSql).collect();
+    let params: Vec<&dyn rusqlite::types::ToSql> = keys
+        .iter()
+        .map(|k| k as &dyn rusqlite::types::ToSql)
+        .collect();
     let rows = stmt.query_map(params.as_slice(), context_from_row)?;
 
     rows.collect()
@@ -84,8 +86,7 @@ pub fn list_context(
             entries.push(row?);
         }
     } else {
-        let mut stmt =
-            conn.prepare("SELECT * FROM context ORDER BY updated_at DESC LIMIT ?1")?;
+        let mut stmt = conn.prepare("SELECT * FROM context ORDER BY updated_at DESC LIMIT ?1")?;
         let rows = stmt.query_map(params![limit as i64], context_from_row)?;
         for row in rows {
             entries.push(row?);
@@ -124,7 +125,14 @@ mod tests {
     #[test]
     fn test_put_and_get() {
         let conn = test_conn();
-        put_context(&conn, "auth-analysis", "default", "The auth module uses JWT.", Some("task-1")).unwrap();
+        put_context(
+            &conn,
+            "auth-analysis",
+            "default",
+            "The auth module uses JWT.",
+            Some("task-1"),
+        )
+        .unwrap();
 
         let entry = get_context(&conn, "auth-analysis").unwrap().unwrap();
         assert_eq!(entry.key, "auth-analysis");

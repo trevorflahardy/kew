@@ -67,6 +67,13 @@ pub struct RunArgs {
     /// No spinner, just result
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Use a named agent (sets system prompt and optional model preference).
+    /// Built-in agents: developer, debugger, docs-writer, security, doc-audit,
+    /// tester, watcher, error-finder. Run `kew agent list` to see all.
+    /// --system overrides the agent's system prompt if both are given.
+    #[arg(long)]
+    pub agent: Option<String>,
 }
 
 impl RunArgs {
@@ -83,7 +90,9 @@ impl RunArgs {
 
         // Try reading from stdin if it's not a TTY
         if atty::is(atty::Stream::Stdin) {
-            anyhow::bail!("no prompt provided. Pass a prompt as an argument, use --file, or pipe to stdin.");
+            anyhow::bail!(
+                "no prompt provided. Pass a prompt as an argument, use --file, or pipe to stdin."
+            );
         }
 
         let mut buf = String::new();
@@ -135,6 +144,7 @@ mod tests {
             timeout: timeout.into(),
             json: false,
             quiet: false,
+            agent: None,
         }
     }
 
@@ -195,18 +205,40 @@ mod tests {
 }
 
 /// Execute the `kew run` command.
-pub async fn execute(args: &RunArgs, db_path: &str, ollama_url: &str, claude_key: Option<&str>) -> Result<()> {
+pub async fn execute(
+    args: &RunArgs,
+    db_path: &str,
+    ollama_url: &str,
+    claude_key: Option<&str>,
+) -> Result<()> {
     let prompt = args.resolve_prompt()?;
-    let route = router::route(&args.model);
+
+    // Resolve agent: load config if --agent was given, derive effective model and system prompt
+    let project_dir = std::env::current_dir().ok();
+    let (effective_model, effective_system) = if let Some(ref agent_name) = args.agent {
+        let cfg = crate::agents::load_agent(agent_name, project_dir.as_deref())
+            .with_context(|| format!("loading agent '{agent_name}'"))?;
+        // --model beats agent's preferred model; --system beats agent's system prompt
+        let model = cfg
+            .model
+            .filter(|_| args.model == "gemma4:26b") // only use agent model if user didn't override
+            .unwrap_or_else(|| args.model.clone());
+        let system = args.system.clone().or(Some(cfg.system_prompt));
+        (model, system)
+    } else {
+        (args.model.clone(), args.system.clone())
+    };
+
+    let route = router::route(&effective_model);
 
     // Open DB
-    let db = Database::open(std::path::Path::new(db_path))
-        .context("failed to open database")?;
+    let db = Database::open(std::path::Path::new(db_path)).context("failed to open database")?;
 
     // Create LLM clients
     let ollama: Arc<dyn crate::llm::LlmClient> = Arc::new(OllamaClient::new(ollama_url));
-    let claude: Option<Arc<dyn crate::llm::LlmClient>> = claude_key
-        .map(|key| Arc::new(crate::llm::claude::ClaudeClient::new(key)) as Arc<dyn crate::llm::LlmClient>);
+    let claude: Option<Arc<dyn crate::llm::LlmClient>> = claude_key.map(|key| {
+        Arc::new(crate::llm::claude::ClaudeClient::new(key)) as Arc<dyn crate::llm::LlmClient>
+    });
 
     // Create the task
     let task = {
@@ -215,7 +247,7 @@ pub async fn execute(args: &RunArgs, db_path: &str, ollama_url: &str, claude_key
             model: route.model.clone(),
             provider: route.provider.clone(),
             prompt: prompt.clone(),
-            system_prompt: args.system.clone(),
+            system_prompt: effective_system,
             context_keys: args.context.clone(),
             share_as: args.share_as.clone(),
             files_locked: args.lock.clone(),
@@ -223,8 +255,7 @@ pub async fn execute(args: &RunArgs, db_path: &str, ollama_url: &str, claude_key
             chain_id: None,
             chain_index: None,
         };
-        db::tasks::create_task(&conn, &new)
-            .context("failed to create task")?;
+        db::tasks::create_task(&conn, &new).context("failed to create task")?;
         db::tasks::claim_next_pending(&conn, "cli")
             .context("failed to claim task")?
             .expect("just-created task should be claimable")
@@ -239,7 +270,10 @@ pub async fn execute(args: &RunArgs, db_path: &str, ollama_url: &str, claude_key
                     .template("{spinner:.cyan} {msg}")
                     .expect("invalid template"),
             );
-            pb.set_message(format!("running on {} via {}...", route.model, route.provider));
+            pb.set_message(format!(
+                "running on {} via {}...",
+                route.model, route.provider
+            ));
             pb.enable_steady_tick(Duration::from_millis(100));
             Some(pb)
         } else {

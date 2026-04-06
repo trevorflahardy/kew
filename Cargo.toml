@@ -32,6 +32,9 @@ serde_yaml = "0.9"
 # IDs
 ulid = "1"
 
+# Home directory lookup (for ~/.config/kew/agents/)
+dirs = "5"
+
 # Error handling
 thiserror = "2"
 anyhow = "1"

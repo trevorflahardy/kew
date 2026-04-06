@@ -82,9 +82,7 @@ impl ChainArgs {
                 if let Some(colon_pos) = s.rfind(':') {
                     let (prompt, model_part) = s.split_at(colon_pos);
                     let model_candidate = &model_part[1..]; // skip ':'
-                    if !model_candidate.is_empty()
-                        && !model_candidate.contains(' ')
-                    {
+                    if !model_candidate.is_empty() && !model_candidate.contains(' ') {
                         let route = router::route(model_candidate);
                         return ChainStep {
                             prompt: prompt.to_string(),
@@ -149,7 +147,11 @@ mod tests {
 
     #[test]
     fn test_parse_steps_with_claude_model() {
-        let args = make_chain_args(vec!["Review code:claude-sonnet-4-20250514"], "default", None);
+        let args = make_chain_args(
+            vec!["Review code:claude-sonnet-4-20250514"],
+            "default",
+            None,
+        );
         let steps = args.parse_steps();
         assert_eq!(steps[0].prompt, "Review code");
         assert_eq!(steps[0].model, "claude-sonnet-4-20250514");
@@ -179,17 +181,22 @@ mod tests {
     }
 }
 
-pub async fn execute(args: &ChainArgs, db_path: &str, ollama_url: &str, claude_key: Option<&str>) -> Result<()> {
+pub async fn execute(
+    args: &ChainArgs,
+    db_path: &str,
+    ollama_url: &str,
+    claude_key: Option<&str>,
+) -> Result<()> {
     let steps = args.parse_steps();
     if steps.is_empty() {
         anyhow::bail!("no steps provided");
     }
 
-    let db = Database::open(std::path::Path::new(db_path))
-        .context("failed to open database")?;
+    let db = Database::open(std::path::Path::new(db_path)).context("failed to open database")?;
     let ollama: Arc<dyn crate::llm::LlmClient> = Arc::new(OllamaClient::new(ollama_url));
-    let claude: Option<Arc<dyn crate::llm::LlmClient>> = claude_key
-        .map(|key| Arc::new(crate::llm::claude::ClaudeClient::new(key)) as Arc<dyn crate::llm::LlmClient>);
+    let claude: Option<Arc<dyn crate::llm::LlmClient>> = claude_key.map(|key| {
+        Arc::new(crate::llm::claude::ClaudeClient::new(key)) as Arc<dyn crate::llm::LlmClient>
+    });
     let chain_id = ulid::Ulid::new().to_string();
 
     let spinner = if !args.quiet && !args.json {

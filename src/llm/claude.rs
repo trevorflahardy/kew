@@ -230,9 +230,10 @@ mod tests {
         let req = MessagesRequest {
             model: "claude-sonnet-4-20250514".into(),
             max_tokens: 4096,
-            messages: vec![
-                ApiMessage { role: "user".into(), content: "Hello".into() },
-            ],
+            messages: vec![ApiMessage {
+                role: "user".into(),
+                content: "Hello".into(),
+            }],
             system: Some("Be helpful".into()),
             temperature: Some(0.3),
         };
@@ -275,7 +276,11 @@ mod tests {
         assert_eq!(resp.content.len(), 2);
 
         // Verify text extraction logic
-        let text: String = resp.content.iter().filter_map(|b| b.text.as_deref()).collect();
+        let text: String = resp
+            .content
+            .iter()
+            .filter_map(|b| b.text.as_deref())
+            .collect();
         assert_eq!(text, "Hello! How are you?");
     }
 
@@ -290,9 +295,18 @@ mod tests {
     fn test_system_prompt_extraction() {
         // Simulate what chat() does: extract system from messages
         let messages = vec![
-            ChatMessage { role: "system".into(), content: "Be helpful".into() },
-            ChatMessage { role: "user".into(), content: "Hello".into() },
-            ChatMessage { role: "user".into(), content: "Another msg".into() },
+            ChatMessage {
+                role: "system".into(),
+                content: "Be helpful".into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "Hello".into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "Another msg".into(),
+            },
         ];
 
         let mut system_prompt = None;
@@ -324,7 +338,10 @@ mod tests {
         let client = ClaudeClient::new("test-key");
         let result = client.embed("nomic-embed-text", &["test".into()]).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("does not support embeddings"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not support embeddings"));
     }
 
     #[tokio::test]

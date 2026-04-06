@@ -4,7 +4,9 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
@@ -35,7 +37,13 @@ impl DashboardState {
         let conn = db.conn();
 
         let counts = db::tasks::count_by_status(&conn).unwrap_or_default();
-        let get = |s: &str| counts.iter().find(|(k, _)| k == s).map(|(_, v)| *v).unwrap_or(0);
+        let get = |s: &str| {
+            counts
+                .iter()
+                .find(|(k, _)| k == s)
+                .map(|(_, v)| *v)
+                .unwrap_or(0)
+        };
 
         let recent_tasks = db::tasks::list_tasks(&conn, None, 20)
             .unwrap_or_default()
@@ -114,7 +122,7 @@ fn render(frame: &mut Frame, state: &DashboardState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),  // Summary
+            Constraint::Length(5), // Summary
             Constraint::Min(10),   // Task table
             Constraint::Length(1), // Footer
         ])
@@ -142,11 +150,31 @@ fn render(frame: &mut Frame, state: &DashboardState) {
 
     // --- Task table ---
     let header = Row::new(vec![
-        Cell::from("ID").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Status").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Model").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Duration").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Prompt").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Cell::from("ID").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Status").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Model").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Duration").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Prompt").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]);
 
     let rows: Vec<Row> = state

@@ -71,8 +71,12 @@ pub fn create_task(conn: &Connection, new: &NewTask) -> rusqlite::Result<Task> {
 
 /// Fetch a task by ID.
 pub fn get_task(conn: &Connection, id: &str) -> rusqlite::Result<Option<Task>> {
-    conn.query_row("SELECT * FROM tasks WHERE id = ?1", params![id], task_from_row)
-        .optional()
+    conn.query_row(
+        "SELECT * FROM tasks WHERE id = ?1",
+        params![id],
+        task_from_row,
+    )
+    .optional()
 }
 
 /// Atomically claim the next pending task for a worker.
@@ -117,7 +121,13 @@ pub fn mark_done(
         "UPDATE tasks SET status = 'done', result = ?2, completed_at = unixepoch('now'),
          prompt_tokens = ?3, completion_tokens = ?4, duration_ms = ?5
          WHERE id = ?1 AND status = 'running'",
-        params![task_id, result, prompt_tokens, completion_tokens, duration_ms],
+        params![
+            task_id,
+            result,
+            prompt_tokens,
+            completion_tokens,
+            duration_ms
+        ],
     )
 }
 
@@ -138,8 +148,8 @@ pub fn list_tasks(
     let mut tasks = Vec::new();
 
     if let Some(s) = status {
-        let mut stmt =
-            conn.prepare("SELECT * FROM tasks WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2")?;
+        let mut stmt = conn
+            .prepare("SELECT * FROM tasks WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2")?;
         let rows = stmt.query_map(params![s.to_string(), limit as i64], task_from_row)?;
         for row in rows {
             tasks.push(row?);
@@ -235,7 +245,15 @@ mod tests {
         let task = create_task(&conn, &sample_new_task()).unwrap();
         claim_next_pending(&conn, "w1").unwrap();
         mark_running(&conn, &task.id).unwrap();
-        mark_done(&conn, &task.id, "print('hello')", Some(10), Some(20), Some(500)).unwrap();
+        mark_done(
+            &conn,
+            &task.id,
+            "print('hello')",
+            Some(10),
+            Some(20),
+            Some(500),
+        )
+        .unwrap();
 
         let done = get_task(&conn, &task.id).unwrap().unwrap();
         assert_eq!(done.status, TaskStatus::Done);

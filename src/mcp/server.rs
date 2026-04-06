@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ListToolsResult, ServerInfo};
 use rmcp::schemars;
 use rmcp::service::RequestContext;
@@ -207,7 +207,10 @@ impl KewMcpServer {
         name = "kew_context_get",
         description = "Retrieve a shared context entry by key. If the key does not exist, returns an empty content string with namespace set to 'not_found' rather than an error."
     )]
-    fn context_get(&self, Parameters(params): Parameters<ContextGetParams>) -> Json<ContextGetResult> {
+    fn context_get(
+        &self,
+        Parameters(params): Parameters<ContextGetParams>,
+    ) -> Json<ContextGetResult> {
         let conn = self.db.conn();
         match db::context::get_context(&conn, &params.key) {
             Ok(Some(entry)) => Json(ContextGetResult {
@@ -227,10 +230,14 @@ impl KewMcpServer {
         name = "kew_context_set",
         description = "Store a shared context entry that can be loaded by future tasks. Returns the key and byte count. NOTE: database write failures are silently ignored — always verify with kew_context_get if the write is critical."
     )]
-    fn context_set(&self, Parameters(params): Parameters<ContextSetParams>) -> Json<ContextSetResult> {
+    fn context_set(
+        &self,
+        Parameters(params): Parameters<ContextSetParams>,
+    ) -> Json<ContextSetResult> {
         let conn = self.db.conn();
         let bytes = params.content.len();
-        let _ = db::context::put_context(&conn, &params.key, &params.namespace, &params.content, None);
+        let _ =
+            db::context::put_context(&conn, &params.key, &params.namespace, &params.content, None);
         Json(ContextSetResult {
             key: params.key,
             bytes,
@@ -245,17 +252,13 @@ impl KewMcpServer {
         &self,
         Parameters(params): Parameters<ContextSearchParams>,
     ) -> Json<ContextSearchResult> {
-        let embeddings = self
-            .ollama
-            .embed("nomic-embed-text", &[params.query])
-            .await;
+        let embeddings = self.ollama.embed("nomic-embed-text", &[params.query]).await;
 
         match embeddings {
             Ok(vecs) if !vecs.is_empty() && !vecs[0].is_empty() => {
                 let conn = self.db.conn();
-                let results =
-                    db::vectors::search_similar(&conn, &vecs[0], None, params.top_k)
-                        .unwrap_or_default();
+                let results = db::vectors::search_similar(&conn, &vecs[0], None, params.top_k)
+                    .unwrap_or_default();
                 Json(ContextSearchResult {
                     results: results
                         .into_iter()
@@ -360,17 +363,27 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LlmClient for MockLlm {
-        async fn chat(&self, _req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
+        async fn chat(
+            &self,
+            _req: ChatRequest,
+        ) -> Result<(ChatResponse, CompletionStats), LlmError> {
             Ok((
                 ChatResponse {
-                    message: ChatMessage { role: "assistant".into(), content: self.response.clone() },
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: self.response.clone(),
+                    },
                     model: "mock".into(),
                     done: true,
                     total_duration_ns: Some(100_000_000),
                     prompt_eval_count: Some(10),
                     eval_count: Some(20),
                 },
-                CompletionStats { prompt_tokens: Some(10), completion_tokens: Some(20), duration_ms: Some(100) },
+                CompletionStats {
+                    prompt_tokens: Some(10),
+                    completion_tokens: Some(20),
+                    duration_ms: Some(100),
+                },
             ))
         }
         async fn embed(&self, _: &str, input: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
@@ -379,12 +392,18 @@ mod tests {
         async fn list_models(&self) -> Result<Vec<String>, LlmError> {
             Ok(vec!["mock-model".into()])
         }
-        async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
-        fn provider_name(&self) -> &str { "mock" }
+        async fn ping(&self) -> Result<(), LlmError> {
+            Ok(())
+        }
+        fn provider_name(&self) -> &str {
+            "mock"
+        }
     }
 
     fn make_server_with_mock(db: Database, response: &str) -> KewMcpServer {
-        let ollama: Arc<dyn LlmClient> = Arc::new(MockLlm { response: response.into() });
+        let ollama: Arc<dyn LlmClient> = Arc::new(MockLlm {
+            response: response.into(),
+        });
         let tool_router = KewMcpServer::tool_router();
         KewMcpServer {
             db,
@@ -410,9 +429,18 @@ mod tests {
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(names.contains(&"kew_run"), "missing kew_run: {names:?}");
-        assert!(names.contains(&"kew_context_get"), "missing kew_context_get");
-        assert!(names.contains(&"kew_context_set"), "missing kew_context_set");
-        assert!(names.contains(&"kew_context_search"), "missing kew_context_search");
+        assert!(
+            names.contains(&"kew_context_get"),
+            "missing kew_context_get"
+        );
+        assert!(
+            names.contains(&"kew_context_set"),
+            "missing kew_context_set"
+        );
+        assert!(
+            names.contains(&"kew_context_search"),
+            "missing kew_context_search"
+        );
         assert!(names.contains(&"kew_status"), "missing kew_status");
         assert!(names.contains(&"kew_doctor"), "missing kew_doctor");
         assert_eq!(tools.len(), 6);
@@ -441,7 +469,10 @@ mod tests {
 
         let run_tool = tools.iter().find(|t| t.name == "kew_run").unwrap();
         let schema = serde_json::to_string(&run_tool.input_schema).unwrap();
-        assert!(schema.contains("prompt"), "kew_run schema should require 'prompt': {schema}");
+        assert!(
+            schema.contains("prompt"),
+            "kew_run schema should require 'prompt': {schema}"
+        );
     }
 
     #[tokio::test]
@@ -460,7 +491,9 @@ mod tests {
         assert_eq!(set_result.bytes, 12);
 
         // Get context
-        let get_params = ContextGetParams { key: "test-key".into() };
+        let get_params = ContextGetParams {
+            key: "test-key".into(),
+        };
         let Json(get_result) = server.context_get(Parameters(get_params));
         assert_eq!(get_result.content, "test content");
         assert_eq!(get_result.namespace, "default");
@@ -471,7 +504,9 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "hi");
 
-        let params = ContextGetParams { key: "nonexistent".into() };
+        let params = ContextGetParams {
+            key: "nonexistent".into(),
+        };
         let Json(result) = server.context_get(Parameters(params));
         assert_eq!(result.namespace, "not_found");
         assert!(result.content.is_empty());
@@ -537,7 +572,9 @@ mod tests {
         assert_eq!(run_result.status, "done");
 
         // Verify context was shared
-        let get_params = ContextGetParams { key: "output-key".into() };
+        let get_params = ContextGetParams {
+            key: "output-key".into(),
+        };
         let Json(ctx) = server.context_get(Parameters(get_params));
         assert_eq!(ctx.content, "shared result");
     }
@@ -550,7 +587,15 @@ mod tests {
         // Store an embedding manually
         {
             let conn = server.db.conn();
-            db::vectors::store_embedding(&conn, "k1", "result", Some("t1"), &[1.0, 0.0, 0.0], "mock").unwrap();
+            db::vectors::store_embedding(
+                &conn,
+                "k1",
+                "result",
+                Some("t1"),
+                &[1.0, 0.0, 0.0],
+                "mock",
+            )
+            .unwrap();
         }
 
         let params = ContextSearchParams {

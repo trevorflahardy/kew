@@ -75,7 +75,4 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type);
 "#;
 
 /// All migrations in order.
-pub const MIGRATIONS: &[(&str, i64)] = &[
-    (MIGRATION_001_CORE, 1),
-    (MIGRATION_002_VECTORS, 2),
-];
+pub const MIGRATIONS: &[(&str, i64)] = &[(MIGRATION_001_CORE, 1), (MIGRATION_002_VECTORS, 2)];

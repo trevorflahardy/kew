@@ -42,7 +42,14 @@ pub fn store_embedding(
              dimensions = excluded.dimensions,
              model = excluded.model,
              created_at = unixepoch('now')",
-        params![key, source_type, source_id, blob, embedding.len() as i64, model],
+        params![
+            key,
+            source_type,
+            source_id,
+            blob,
+            embedding.len() as i64,
+            model
+        ],
     )?;
     Ok(())
 }
@@ -74,14 +81,15 @@ pub fn search_similar(
 
     let mut stmt = conn.prepare(sql)?;
 
-    let extract_row = |row: &rusqlite::Row| -> rusqlite::Result<(String, String, Option<String>, Vec<u8>)> {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, Vec<u8>>(3)?,
-        ))
-    };
+    let extract_row =
+        |row: &rusqlite::Row| -> rusqlite::Result<(String, String, Option<String>, Vec<u8>)> {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        };
 
     let mut scored: Vec<SearchResult> = Vec::new();
 
@@ -91,7 +99,12 @@ pub fn search_similar(
             let (key, st, sid, blob) = row?;
             let stored = blob_to_embedding(&blob);
             let score = cosine_similarity(query_embedding, &stored);
-            scored.push(SearchResult { key, source_type: st, source_id: sid, score });
+            scored.push(SearchResult {
+                key,
+                source_type: st,
+                source_id: sid,
+                score,
+            });
         }
     } else {
         let rows = stmt.query_map([], extract_row)?;
@@ -99,12 +112,21 @@ pub fn search_similar(
             let (key, st, sid, blob) = row?;
             let stored = blob_to_embedding(&blob);
             let score = cosine_similarity(query_embedding, &stored);
-            scored.push(SearchResult { key, source_type: st, source_id: sid, score });
+            scored.push(SearchResult {
+                key,
+                source_type: st,
+                source_id: sid,
+                score,
+            });
         }
     }
 
     // Sort by score descending, take top_k
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(top_k);
 
     Ok(scored)

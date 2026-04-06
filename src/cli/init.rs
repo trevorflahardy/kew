@@ -181,10 +181,8 @@ mod tests {
         let dir = tempdir().unwrap();
         inject_mcp_config(dir.path()).unwrap();
 
-        let content = std::fs::read_to_string(
-            dir.path().join(".claude/settings.local.json"),
-        )
-        .unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".claude/settings.local.json")).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(json["mcpServers"]["kew"].is_object());
         assert_eq!(json["mcpServers"]["kew"]["command"], "kew");
@@ -220,13 +218,14 @@ mod tests {
         assert!(script.contains("kew --db"));
 
         // settings.local.json has the statusLine key
-        let content = std::fs::read_to_string(
-            dir.path().join(".claude/settings.local.json"),
-        )
-        .unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".claude/settings.local.json")).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(json["statusLine"]["type"], "command");
-        assert!(json["statusLine"]["command"].as_str().unwrap().contains("kew-statusline.sh"));
+        assert!(json["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("kew-statusline.sh"));
     }
 
     #[test]
@@ -292,6 +291,7 @@ done_count=$(_get done)
 failed=$(_get failed)
 context=$(_get context)
 embeddings=$(_get embeddings)
+db_size=$(_get db)
 
 parts=""
 if [ "${running:-0}" -gt 0 ]; then
@@ -307,14 +307,11 @@ if [ "${failed:-0}" -gt 0 ]; then
   parts="${parts} ✗${failed}"
 fi
 parts="${parts}  ctx:${context:-0} emb:${embeddings:-0}"
-
-if [ -f "$db_path" ]; then
-  db_indicator="DB:ok"
-else
-  db_indicator="DB:?"
+if [ -n "$db_size" ] && [ "$db_size" != "0KB" ]; then
+  parts="${parts} ${db_size}"
 fi
 
-printf "◆ kew  %s  %s" "$parts" "$db_indicator"
+printf "◆ kew  %s" "$parts"
 "#;
 
 /// Write the statusline script and wire it into .claude/settings.local.json.

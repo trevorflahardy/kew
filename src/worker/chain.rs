@@ -163,11 +163,17 @@ mod tests {
 
         // Step 0: just its own prompt
         let r0 = results[0].result.as_ref().unwrap();
-        assert!(r0.contains("step-0-prompt"), "step 0 should have its prompt: {r0}");
+        assert!(
+            r0.contains("step-0-prompt"),
+            "step 0 should have its prompt: {r0}"
+        );
 
         // Step 1: should have step 0's output as context + its own prompt
         let r1 = results[1].result.as_ref().unwrap();
-        assert!(r1.contains("step-1-prompt"), "step 1 should have its prompt: {r1}");
+        assert!(
+            r1.contains("step-1-prompt"),
+            "step 1 should have its prompt: {r1}"
+        );
         assert!(
             r1.contains("step-0-prompt"),
             "step 1 should see step 0's result as context: {r1}"
@@ -188,7 +194,10 @@ mod tests {
             ) -> Result<(ChatResponse, CompletionStats), LlmError> {
                 let n = self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n >= 1 {
-                    return Err(LlmError::ProviderError { status: 500, body: "forced failure".into() });
+                    return Err(LlmError::ProviderError {
+                        status: 500,
+                        body: "forced failure".into(),
+                    });
                 }
                 Ok((
                     ChatResponse {

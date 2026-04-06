@@ -45,11 +45,11 @@ impl Worker {
     fn client_for(&self, provider: &Provider) -> Result<&dyn LlmClient, LlmError> {
         match provider {
             Provider::Ollama => Ok(self.ollama.as_ref()),
-            Provider::Claude => self
-                .claude
-                .as_ref()
-                .map(|c| c.as_ref())
-                .ok_or_else(|| LlmError::ModelNotFound("Claude API client not configured".into())),
+            Provider::Claude => {
+                self.claude.as_ref().map(|c| c.as_ref()).ok_or_else(|| {
+                    LlmError::ModelNotFound("Claude API client not configured".into())
+                })
+            }
         }
     }
 
@@ -192,7 +192,8 @@ impl Worker {
                 }
 
                 // Auto-embed result for future vector search (best-effort)
-                self.try_embed_result(&task.id, &task.prompt, &result_text).await;
+                self.try_embed_result(&task.id, &task.prompt, &result_text)
+                    .await;
 
                 info!(duration_ms = stats.duration_ms, "task completed");
                 WorkResult {
@@ -392,7 +393,9 @@ mod tests {
 
         // Verify context was shared
         let conn = db.conn();
-        let ctx = db::context::get_context(&conn, "auth-analysis").unwrap().unwrap();
+        let ctx = db::context::get_context(&conn, "auth-analysis")
+            .unwrap()
+            .unwrap();
         assert_eq!(ctx.content, "JWT authentication is recommended");
         assert_eq!(ctx.created_by.as_deref(), Some(task.id.as_str()));
     }
@@ -486,13 +489,27 @@ mod tests {
         struct FailingClient;
         #[async_trait::async_trait]
         impl LlmClient for FailingClient {
-            async fn chat(&self, _req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
-                Err(LlmError::ProviderError { status: 500, body: "internal error".into() })
+            async fn chat(
+                &self,
+                _req: ChatRequest,
+            ) -> Result<(ChatResponse, CompletionStats), LlmError> {
+                Err(LlmError::ProviderError {
+                    status: 500,
+                    body: "internal error".into(),
+                })
             }
-            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
-            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
-            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
-            fn provider_name(&self) -> &str { "failing" }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
+                Ok(vec![])
+            }
+            async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+                Ok(vec![])
+            }
+            async fn ping(&self) -> Result<(), LlmError> {
+                Ok(())
+            }
+            fn provider_name(&self) -> &str {
+                "failing"
+            }
         }
 
         let db = Database::open_in_memory().unwrap();
@@ -522,7 +539,9 @@ mod tests {
 
         // Verify DB records failure
         let conn = db.conn();
-        let task = db::tasks::get_task(&conn, &result.task_id).unwrap().unwrap();
+        let task = db::tasks::get_task(&conn, &result.task_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(task.status, TaskStatus::Failed);
         assert!(task.error.unwrap().contains("internal error"));
     }
@@ -607,7 +626,10 @@ mod tests {
 
         let result = worker.execute(&task).await;
         assert!(result.result.is_err());
-        assert!(result.result.unwrap_err().contains("could not acquire lock"));
+        assert!(result
+            .result
+            .unwrap_err()
+            .contains("could not acquire lock"));
     }
 
     #[tokio::test]
@@ -615,20 +637,37 @@ mod tests {
         struct ClaudeMock;
         #[async_trait::async_trait]
         impl LlmClient for ClaudeMock {
-            async fn chat(&self, _req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
+            async fn chat(
+                &self,
+                _req: ChatRequest,
+            ) -> Result<(ChatResponse, CompletionStats), LlmError> {
                 Ok((
                     ChatResponse {
-                        message: ChatMessage { role: "assistant".into(), content: "from claude".into() },
-                        model: "claude-sonnet".into(), done: true,
-                        total_duration_ns: None, prompt_eval_count: None, eval_count: None,
+                        message: ChatMessage {
+                            role: "assistant".into(),
+                            content: "from claude".into(),
+                        },
+                        model: "claude-sonnet".into(),
+                        done: true,
+                        total_duration_ns: None,
+                        prompt_eval_count: None,
+                        eval_count: None,
                     },
                     CompletionStats::default(),
                 ))
             }
-            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
-            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
-            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
-            fn provider_name(&self) -> &str { "claude" }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
+                Ok(vec![])
+            }
+            async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+                Ok(vec![])
+            }
+            async fn ping(&self) -> Result<(), LlmError> {
+                Ok(())
+            }
+            fn provider_name(&self) -> &str {
+                "claude"
+            }
         }
 
         let db = Database::open_in_memory().unwrap();

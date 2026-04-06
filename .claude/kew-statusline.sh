@@ -34,6 +34,7 @@ done_count=$(_get done)
 failed=$(_get failed)
 context=$(_get context)
 embeddings=$(_get embeddings)
+db_size=$(_get db)
 
 # Build the status segments
 parts=""
@@ -58,11 +59,9 @@ fi
 # Knowledge base
 parts="${parts}  ctx:${context:-0} emb:${embeddings:-0}"
 
-# DB health indicator (file readable = ok)
-if [ -f "$db_path" ]; then
-  db_indicator="DB:ok"
-else
-  db_indicator="DB:?"
+# DB size (omit if zero/unknown)
+if [ -n "$db_size" ] && [ "$db_size" != "0KB" ]; then
+  parts="${parts} ${db_size}"
 fi
 
-printf "◆ kew  %s  %s" "$parts" "$db_indicator"
+printf "◆ kew  %s" "$parts"
