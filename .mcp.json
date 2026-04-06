@@ -1,0 +1,13 @@
+{
+    "mcpServers": {
+        "kew": {
+            "args": [
+                "mcp",
+                "serve",
+                "--db",
+                "./.kew/kew.db"
+            ],
+            "command": "kew"
+        }
+    }
+}

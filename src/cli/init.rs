@@ -377,27 +377,25 @@ mod tests {
         let dir = tempdir().unwrap();
         inject_mcp_config(dir.path()).unwrap();
 
-        let content =
-            std::fs::read_to_string(dir.path().join(".claude/settings.local.json")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(json["mcpServers"]["kew"].is_object());
         assert_eq!(json["mcpServers"]["kew"]["command"], "kew");
+        assert_eq!(json["mcpServers"]["kew"]["args"][3], "./.kew/kew.db");
     }
 
     #[test]
     fn test_inject_mcp_config_preserves_existing() {
         let dir = tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
-            claude_dir.join("settings.local.json"),
+            dir.path().join(".mcp.json"),
             r#"{"mcpServers":{"other":{"command":"other"}}}"#,
         )
         .unwrap();
 
         inject_mcp_config(dir.path()).unwrap();
 
-        let content = std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert!(json["mcpServers"]["other"].is_object());
         assert!(json["mcpServers"]["kew"].is_object());
@@ -576,43 +574,38 @@ fn inject_statusline_config(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Inject kew MCP server config into Claude Code's project-local settings.
+/// Inject kew MCP server config into .mcp.json at the project root.
+///
+/// .mcp.json is Claude Code's project-level MCP config file. It supports
+/// relative paths and resolves `command` through the user's shell PATH,
+/// so no absolute binary path is needed.
 fn inject_mcp_config(project_dir: &Path) -> Result<()> {
-    let claude_dir = project_dir.join(".claude");
-    let settings_path = claude_dir.join("settings.local.json");
+    let mcp_path = project_dir.join(".mcp.json");
 
-    // Read existing settings or start fresh
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path)?;
+    // Read existing .mcp.json or start fresh
+    let mut config: serde_json::Value = if mcp_path.exists() {
+        let content = std::fs::read_to_string(&mcp_path)?;
         serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
     } else {
-        if !claude_dir.exists() {
-            std::fs::create_dir_all(&claude_dir)?;
-        }
         serde_json::json!({})
     };
 
     // Ensure mcpServers object exists
-    if settings.get("mcpServers").is_none() {
-        settings["mcpServers"] = serde_json::json!({});
+    if config.get("mcpServers").is_none() {
+        config["mcpServers"] = serde_json::json!({});
     }
 
-    // Add/update kew entry — use absolute path so the MCP server can be spawned
-    // from any working directory (Claude Code doesn't cd into the project first).
-    let db_path = project_dir
-        .canonicalize()
-        .unwrap_or_else(|_| project_dir.to_path_buf())
-        .join(".kew/kew.db");
-    let db_path_str = db_path.to_string_lossy();
-    settings["mcpServers"]["kew"] = serde_json::json!({
+    // Use a relative DB path — .mcp.json is always at the project root,
+    // so ./.kew/kew.db resolves correctly regardless of where Claude Code
+    // launches the subprocess from.
+    config["mcpServers"]["kew"] = serde_json::json!({
         "command": "kew",
-        "args": ["mcp", "serve", "--db", db_path_str]
+        "args": ["mcp", "serve", "--db", "./.kew/kew.db"]
     });
 
-    // Write back
-    let json = serde_json::to_string_pretty(&settings)?;
-    std::fs::write(&settings_path, format!("{json}\n"))?;
-    println!("\u{2713} Injected kew MCP server into .claude/settings.local.json");
+    let json = serde_json::to_string_pretty(&config)?;
+    std::fs::write(&mcp_path, format!("{json}\n"))?;
+    println!("\u{2713} Wrote kew MCP server config to .mcp.json");
 
     Ok(())
 }
