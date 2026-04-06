@@ -1,0 +1,25 @@
+# kew_config.yaml — project-level kew configuration
+# See: https://github.com/futur/kew
+
+defaults:
+  model: gemma3:27b
+  provider: ollama
+  workers: 4
+  timeout: 5m
+
+ollama:
+  url: http://localhost:11434
+  embedding_model: nomic-embed-text
+
+# Model aliases
+aliases:
+  fast: gemma3:27b
+  # smart: claude-sonnet-4-20250514
+  # code: codellama
+
+# Agent type overrides (override built-in defaults)
+# agents:
+#   coder:
+#     model: codellama
+#     system_prompt_append: |
+#       This project uses Rust with tokio for async.

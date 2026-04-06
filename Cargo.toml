@@ -1,0 +1,65 @@
+[package]
+name = "kew"
+version = "0.1.0"
+edition = "2021"
+description = "Real local agent orchestration"
+license = "MIT"
+
+[[bin]]
+name = "kew"
+path = "src/main.rs"
+
+[dependencies]
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+atty = "0.2"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# IDs
+ulid = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# TUI & terminal
+indicatif = "0.17"
+console = "0.15"
+
+# TUI dashboard
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+
+# MCP server
+rmcp = { version = "1", features = ["server", "transport-io", "macros"], optional = true }
+schemars = { version = "0.8", optional = true }
+
+# Vector search
+zerocopy = { version = "0.8", optional = true }
+
+[features]
+default = ["tui", "mcp", "vectors"]
+tui = ["dep:ratatui", "dep:crossterm"]
+mcp = ["dep:rmcp", "dep:schemars"]
+vectors = ["dep:zerocopy"]
+
+[dev-dependencies]
+tokio-test = "0.4"
