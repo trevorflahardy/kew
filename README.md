@@ -1,111 +1,83 @@
-# 🎯 Kew
+# kew
 
-**Real local agent orchestration. No theater.**
+Local agent orchestration. Kew is a single Rust binary that runs LLM agents — local via Ollama or cloud via Claude — coordinates them through SQLite, and integrates with Claude Code as a CLI tool and MCP server.
 
-Kew is a single Rust binary that spawns real LLM agents — local (Ollama) and cloud (Claude) — coordinates them via SQLite, learns from past work through embedded vector search, and integrates with Claude Code as both a CLI tool and MCP server.
-
-Every other multi-agent framework builds the *bookkeeping* — topologies, consensus protocols, JSON state files — without building the **process**: a worker that calls an LLM and returns results. Kew skips the theater and does the work.
+The core loop is simple: a worker claims a task, calls an LLM, stores the result. Every result gets embedded automatically, so later tasks can pull relevant context via vector search without you managing it explicitly.
 
 ---
 
-## ✨ What Makes Kew Different
-
-- 🔧 **Phase 2 calls a real LLM.** Not phase 8. Not "future work."
-- 🧪 **Zero config to start.** Install Ollama, install kew, run. No daemon, no config file, no setup wizard.
-- 📦 **Single Rust binary.** ~10MB, instant startup, no runtime dependencies.
-- 🧠 **Automatic learning.** Every completed task result gets embedded. Future tasks benefit via vector similarity search. No explicit "training."
-- 🗄️ **SQLite is the bus.** One file. Survives crashes. Inspectable with `sqlite3`. WAL mode for concurrent access.
-- 🔌 **MCP native.** Claude Code can call kew tools directly via the Model Context Protocol.
-
----
-
-## 🚀 Quick Start
+## Quick start
 
 ```bash
-# 1. Have Ollama running with a model pulled
+# Requires Ollama running locally
 ollama pull gemma3:27b
-
-# 2. Build kew
 cargo build --release
-
-# 3. Run your first agent
 ./target/release/kew run -m gemma3:27b -w "Write a prime checker in Python"
 ```
 
-That's it. Real code comes back from a real LLM. No config files, no daemon processes, no API keys (for local models).
-
-### 🔑 Using Claude (Cloud)
+For Claude:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 kew run -m claude-sonnet-4-20250514 -w "Explain Rust lifetimes in 3 sentences"
 ```
 
-Kew automatically routes models starting with `claude-` to the Anthropic API and everything else to Ollama.
+Models starting with `claude-` route to the Anthropic API; everything else goes to Ollama.
 
 ---
 
-## 📖 How It Works
+## How it works
 
-### 🏗️ The Architecture
+Each task follows this path:
 
-Kew is built around a simple pipeline that every task follows:
+1. Task arrives (CLI, MCP, or chain step)
+2. Worker atomically claims it via `UPDATE...RETURNING` — no double-claiming
+3. Context loads: explicit keys + optional vector similarity search over past results
+4. File locks acquired if specified
+5. LLM called via `reqwest` to Ollama `/api/chat` or Claude Messages API
+6. Result stored: status, output, token counts, duration — all in SQLite
+7. Result embedded with `nomic-embed-text` for future retrieval
+8. Locks released
 
-1. **Task arrives** — via CLI, MCP tool, or chain step
-2. **Worker claims it** — atomic SQLite `UPDATE...RETURNING` prevents double-claiming
-3. **Context loads** — explicit key-value entries + optional vector similarity search over past results
-4. **File locks acquired** — prevents concurrent agents from editing the same files
-5. **LLM gets called** — `reqwest` POST to Ollama `/api/chat` or Claude Messages API
-6. **Result stored** — status, output, token counts, duration all recorded in SQLite
-7. **Result shared** — optionally stored as named context for other tasks; always embedded for future retrieval
-8. **Locks released** — other agents can now access those files
+Workers are tokio tasks in a pool (default: 4 concurrent), not OS processes. No IPC overhead, no daemon.
 
-### 🧵 Worker Pool
+### SQLite as coordination bus
 
-Workers are **tokio tasks**, not OS processes. The pool uses `mpsc` channels to distribute work across N concurrent workers (default 4). Each worker independently claims tasks, calls LLMs, and stores results. The pool runs entirely in-process with zero IPC overhead.
+One file: `.kew/kew.db`. WAL mode, survives crashes, inspectable with `sqlite3`.
 
-### 🗄️ SQLite as Coordination Bus
+- `tasks` — work queue with atomic claiming. States: `pending → assigned → running → done/failed/cancelled`
+- `context` — key-value store for inter-agent knowledge sharing
+- `file_locks` — TTL-based locks preventing concurrent file edits
+- `embeddings` — 768-dim float vectors (cosine similarity computed in Rust)
 
-Everything lives in one SQLite file (`.kew/kew.db`). WAL mode enables concurrent reads while writes are serialized. The schema includes:
+### Vector search / RAG
 
-- **`tasks`** — The work queue. Status enum: `pending → assigned → running → done/failed/cancelled`. Atomic claiming via `UPDATE...RETURNING` ensures no task runs twice.
-- **`context`** — Key-value store for shared knowledge between agents. Namespaced, with metadata tracking who created each entry.
-- **`file_locks`** — Prevents two agents from editing the same file simultaneously. TTL-based with automatic expiry cleanup.
-- **`embeddings`** — Vector storage for semantic search. 768-dimensional float vectors (from `nomic-embed-text`) stored as BLOBs, with cosine similarity computed in Rust.
-
-### 🧠 Learning via Vector Search
-
-Every completed task result is automatically embedded using Ollama's `/api/embed` endpoint (model: `nomic-embed-text`, 768 dimensions). These embeddings are stored alongside the result in SQLite.
-
-When a new task uses `--auto-context`, kew searches past results by cosine similarity and injects the most relevant ones as context. This is **RAG over your own work product** — no fine-tuning, no external vector database, just embedded retrieval that gets more useful the more you use kew.
+Every completed task result is embedded. New tasks with `--auto-context` search past results by cosine similarity and inject the top matches as context. No external vector database — just SQLite BLOBs and a Rust cosine similarity function.
 
 ```bash
-# Embed and search manually
 kew context set "auth-design" "We use JWT tokens with 15-minute expiry..."
 kew context search "how does authentication work?" --top-k 5
-
-# Or let it happen automatically
 kew run -m gemma3:27b -w "Refactor the auth middleware" --auto-context
 ```
 
 ---
 
-## 🔗 Chains
+## Chains
 
-Sequential multi-step execution where each step's output becomes the next step's context:
+Sequential execution where each step's output feeds into the next:
 
 ```bash
 kew chain \
   --step "Analyze the current auth module:gemma3:27b" \
-  --step "Write a refactoring plan based on the analysis:claude-sonnet-4-20250514" \
+  --step "Write a refactoring plan:claude-sonnet-4-20250514" \
   --step "Generate the refactored code:claude-sonnet-4-20250514"
 ```
 
-Each step automatically shares its result as `{chain_id}-step-{N}`, and the next step loads the previous step's output. If any step fails, the chain stops immediately.
+Each step's result is stored as `{chain_id}-step-{N}` and loaded by the following step. The chain stops on first failure.
 
 ---
 
-## 🔌 MCP Server
+## MCP server
 
 Kew runs as a Model Context Protocol server, letting Claude Code call it directly:
 
@@ -121,218 +93,164 @@ Kew runs as a Model Context Protocol server, letting Claude Code call it directl
 }
 ```
 
-### Available MCP Tools
+Available tools:
 
-| Tool | What it does |
+| Tool | Description |
 |------|-------------|
-| 🏃 `kew_run` | Execute a prompt through any model, get the result back |
-| 📖 `kew_context_get` | Read a shared context entry by key |
-| ✏️ `kew_context_set` | Write a shared context entry |
-| 🔍 `kew_context_search` | Vector similarity search over stored knowledge |
-| 📊 `kew_status` | Task counts, context entries, embedding stats |
-| 🩺 `kew_doctor` | Health check — is Ollama running? Are models available? |
+| `kew_run` | Execute a prompt through any model, returns result |
+| `kew_context_get` | Read a shared context entry by key |
+| `kew_context_set` | Write a shared context entry |
+| `kew_context_search` | Vector similarity search over stored knowledge |
+| `kew_status` | Task counts, context entries, embedding stats |
+| `kew_doctor` | Health check — Ollama reachable, models available, DB ok |
+| `kew_list_agents` | List available agents with keyword hints |
 
-All tools are blocking — Claude Code calls them and gets results back in the same turn. The MCP server uses `rmcp` (the official Rust MCP SDK) with stdio transport.
+All tools are blocking. The server uses `rmcp` (official Rust MCP SDK) with stdio transport.
 
 ---
 
-## 🖥️ CLI Reference
+## CLI reference
 
 ```
-kew run [prompt]                          Execute a task through an LLM
-    -m, --model <model>                   Model name (default: gemma3:27b)
-    -w, --wait                            Block until complete
-    -s, --system <prompt>                 System prompt
-    -f, --file <path>                     Read prompt from file
-    -c, --context <key>                   Load context key (repeatable)
-    --share-as <key>                      Store result as context
-    --lock <path>                         Acquire file lock (repeatable)
-    --auto-context                        Vector search for relevant context
-    --top-k <n>                           Number of vector results (default: 5)
-    --json                                JSON output
-    -q, --quiet                           No spinner
+kew run [prompt]
+    -m, --model <model>       Model name (default: gemma3:27b)
+    -w, --wait                Block until complete, print result
+    -s, --system <prompt>     System prompt
+    -f, --file <path>         Read prompt from file
+    -c, --context <key>       Load context key (repeatable)
+    --share-as <key>          Store result as context entry
+    --lock <path>             Acquire file lock before running (repeatable)
+    --auto-context            Vector search for relevant past results
+    --top-k <n>               Number of vector results (default: 5)
+    --json                    JSON output
+    -q, --quiet               No spinner
 
-kew chain                                 Sequential multi-step execution
-    --step <"prompt:model">               Step spec (repeatable)
-    -m, --model <model>                   Default model for steps
-    -s, --system <prompt>                 Shared system prompt
+kew chain
+    --step <"prompt:model">   Step spec (repeatable)
+    -m, --model <model>       Default model for steps without one
+    -s, --system <prompt>     Shared system prompt
 
 kew context list|get|set|delete|search|clear
-                                          Manage shared context
 
-kew status                                Interactive TUI dashboard (ratatui)
-    --brief                               Text summary, no TUI
-    --porcelain                           Machine-readable for status bars
+kew status                    Interactive TUI dashboard
+    --brief                   Text summary, no TUI
+    --porcelain               Machine-readable output for status bars
 
-kew mcp serve                             Start MCP server (stdio)
+kew mcp serve                 Start MCP server on stdio
 
-kew doctor                                Health check
+kew doctor                    Health check
 
-kew init                                  Initialize kew for a project
-    --no-mcp                              Skip MCP config injection
-    --no-statusline                       Skip status line setup
-    --no-gitignore                        Skip .gitignore modification
-    --model <model>                       Default model for config
+kew init                      Set up kew for a project directory
+    --no-mcp                  Skip MCP config injection
+    --no-statusline           Skip status line setup
+    --no-gitignore            Skip .gitignore update
+    --model <model>           Default model for generated config
 ```
 
-### 📤 Output Modes
+Output modes for `kew run`:
 
-- **`--wait` mode**: Raw LLM output to stdout. No decoration. This is what Claude Code reads via Bash.
-- **`--json` mode**: Structured JSON with task_id, status, result, duration_ms, token counts.
-- **Interactive**: `indicatif` spinner while working, then formatted result with `console` colors.
-- **`--porcelain`**: Single-line `key=value` pairs for shell scripts and status bars.
-
----
-
-## 📊 TUI Dashboard
-
-`kew status` launches an interactive terminal dashboard built with `ratatui` + `crossterm`:
-
-- 📈 Summary bar with task counts by status
-- 📋 Task table with colored status indicators, models, durations
-- ⌨️ Press `q` to quit, auto-refreshes every second
-
-Use `kew status --brief` for a quick text summary without entering the TUI.
+- `--wait`: raw LLM output to stdout — what Claude Code reads via Bash
+- `--json`: `{ task_id, status, result, duration_ms, prompt_tokens, completion_tokens }`
+- `--porcelain`: single-line `key=value` pairs for shell scripts and status bars
+- Default: spinner while running, formatted result with colors
 
 ---
 
-## ⚙️ Technology Stack
+## Status line
 
-| Component | Crate | Why |
-|-----------|-------|-----|
-| 🔄 Async runtime | `tokio` | Powers the worker pool, reqwest, and MCP server |
-| 🖥️ CLI | `clap` (derive) | Ergonomic argument parsing with derive macros |
-| 🌐 HTTP | `reqwest` | Async HTTP for Ollama and Claude API calls |
-| 🗄️ Database | `rusqlite` (bundled) | SQLite compiled into the binary, zero external deps |
-| 📡 MCP | `rmcp` | Official Rust MCP SDK with stdio transport |
-| 🖼️ TUI | `ratatui` + `crossterm` | Terminal dashboard with sub-ms rendering |
-| ⏳ Progress | `indicatif` + `console` | Spinners, progress bars, and colored output |
-| 🔢 IDs | `ulid` | Time-sortable unique IDs, no coordination needed |
-| 📝 Serialization | `serde` + `serde_json` | Standard Rust serialization throughout |
-| 🔐 Schemas | `schemars` | JSON Schema generation for MCP tool parameters |
-| ⚡ Vectors | `zerocopy` | Zero-copy f32 vector handling for embeddings |
-| ❌ Errors | `thiserror` + `anyhow` | Typed errors in libraries, ergonomic errors in CLI |
-| 📋 Logging | `tracing` | Structured, async-aware logging with env filter |
+After `kew init`, Claude Code shows a live status bar:
 
-### 🏗️ Feature Flags
-
-```toml
-[features]
-default = ["tui", "mcp", "vectors"]
-tui = ["dep:ratatui", "dep:crossterm"]       # TUI dashboard
-mcp = ["dep:rmcp", "dep:schemars"]           # MCP server
-vectors = ["dep:zerocopy"]                    # Vector search
+```
+◆ kew  ▶ 2 ⏳3 ✓15 ✗1  ctx:8 emb:42 tok:14.2k  4.1MB
 ```
 
-Build without optional features for a smaller binary:
-```bash
-cargo build --release --no-default-features   # CLI only, no TUI/MCP/vectors
-```
+Fields: running tasks, pending tasks, done, failed, context entries, embeddings, total tokens used by agents, DB size. Token count accumulates across all completed tasks so you can see the running cost of agent work in the session.
 
 ---
 
-## 🧪 Testing
-
-78 tests covering every layer of the application:
-
-```bash
-cargo test                    # Run all tests
-cargo clippy -- -D warnings   # Lint with zero warnings
-```
-
-### Test Coverage
-
-| Layer | Tests | What's covered |
-|-------|-------|----------------|
-| 🗄️ Database | 17 | Migrations, task CRUD, atomic claiming, no-double-claim, context CRUD, file locks, vector store/search/upsert, cosine similarity, blob roundtrip |
-| 🤖 LLM | 11 | Claude request serialization, response deserialization, system prompt extraction, error handling, model routing (Ollama/Claude/unknown) |
-| 🔌 MCP | 12 | Server info, tool listing, schema validation, run execution, context get/set, search with embeddings, status, doctor |
-| ⚡ Worker | 10 | Task execution, context loading, context sharing, lock acquire/release, lock conflicts, LLM failure handling, Claude routing, missing provider errors, chain context passing, chain failure stops |
-| 🖥️ CLI | 18 | Timeout parsing, prompt resolution (arg/file/precedence), chain step parsing (plain/model/claude/multiple), gitignore creation/append/dedup, MCP config injection, statusline injection, config template |
-
-All worker and MCP tests use **mock LLM clients** that return deterministic responses — no external services needed. Database tests use SQLite `:memory:` databases.
-
----
-
-## 🔄 LLM Provider Routing
-
-Kew supports two LLM providers with automatic routing:
-
-### 🦙 Ollama (Local)
-- Any model name not starting with `claude-` routes to Ollama
-- Calls `/api/chat` for completions, `/api/embed` for embeddings
-- Default URL: `http://localhost:11434` (configurable via `--ollama-url` or `KEW_OLLAMA_URL`)
-- Supports all Ollama models: gemma3, llama3, codellama, mistral, phi3, etc.
-
-### 🧠 Claude (Cloud)
-- Models starting with `claude-` route to the Anthropic Messages API
-- Requires `ANTHROPIC_API_KEY` environment variable or `--claude-key` flag
-- System prompts extracted from message array to top-level API field (per Anthropic spec)
-- Available models: `claude-sonnet-4-20250514`, `claude-haiku-4-5-20251001`, `claude-opus-4-20250514`
-- Does not support embeddings — embedding always uses Ollama's `nomic-embed-text`
-
----
-
-## 🔒 File Locking
-
-When multiple agents work on a codebase simultaneously, file locks prevent conflicts:
-
-```bash
-# Agent 1 locks src/auth.rs while working
-kew run -m gemma3:27b -w "Refactor auth" --lock src/auth.rs
-
-# Agent 2 trying to lock the same file will fail immediately
-kew run -m gemma3:27b -w "Add tests for auth" --lock src/auth.rs
-# Error: could not acquire lock on src/auth.rs
-```
-
-Locks are TTL-based (default 600 seconds) and automatically cleaned up on expiry. They're released when the task completes, whether it succeeds or fails.
-
----
-
-## 🏠 Project Initialization
+## Project initialization
 
 ```bash
 kew init
 ```
 
-This sets up kew for a project directory:
-- 📁 Creates `.kew/` directory with SQLite database
-- 📝 Scaffolds `kew_config.yaml` with sensible defaults
-- 🔌 Injects MCP server config into `.claude/settings.local.json`
-- 📊 Installs a status line script for Claude Code
-- 🙈 Adds `.kew/` to `.gitignore`
-
-Each step can be skipped with `--no-mcp`, `--no-statusline`, or `--no-gitignore`.
+Creates `.kew/` with the SQLite database, scaffolds `kew_config.yaml`, injects MCP server config into `.claude/settings.local.json`, installs the status line script, and adds `.kew/` to `.gitignore`.
 
 ---
 
-## 📊 Status Line
+## Agents
 
-After `kew init`, Claude Code shows a live status bar:
+Built-in agents (YAML configs compiled into the binary):
 
-```
-◆ kew  ▶ 2 ⏳3 ✓15 ✗1  ctx:8 emb:42  DB:ok
-```
+| Agent | Role |
+|-------|------|
+| `developer` | Production code writer |
+| `debugger` | Systematic root-cause analysis |
+| `docs-writer` | Documentation |
+| `security` | Vulnerability auditor |
+| `doc-audit` | Documentation gap finder |
+| `tester` | Test suite writer |
+| `watcher` | Progress tracker |
+| `error-finder` | Adversarial bug detector |
 
-This tells you at a glance: 2 running tasks, 3 pending, 15 done, 1 failed, 8 context entries, 42 embeddings, database accessible.
+Override or add agents by dropping YAML files in `.kew/agents/<name>.yaml` (project-local) or `~/.config/kew/agents/<name>.yaml` (user-global).
 
 ---
 
-## 🏥 Health Check
+## File locking
 
 ```bash
-kew doctor
+kew run -m gemma3:27b -w "Refactor auth" --lock src/auth.rs
+# Another agent trying to lock the same file fails immediately
 ```
 
-Checks:
-- ✅ Ollama reachable and responding
-- ✅ Models available and loaded
-- ✅ Database accessible and migrated
-- ✅ Claude API key valid (if configured)
+Locks are TTL-based (default 600s), released on task completion (success or failure), and auto-expire.
 
 ---
 
-## 📜 License
+## Technology
+
+| Component | Crate |
+|-----------|-------|
+| Async runtime | `tokio` |
+| CLI | `clap` (derive) |
+| HTTP | `reqwest` |
+| Database | `rusqlite` (bundled SQLite) |
+| MCP | `rmcp` |
+| TUI | `ratatui` + `crossterm` |
+| Progress | `indicatif` + `console` |
+| IDs | `ulid` |
+| Serialization | `serde` + `serde_json` |
+| MCP schemas | `schemars` |
+| Vectors | `zerocopy` |
+| Errors | `thiserror` + `anyhow` |
+| Logging | `tracing` |
+
+Feature flags:
+
+```toml
+[features]
+default = ["tui", "mcp", "vectors"]
+tui = ["dep:ratatui", "dep:crossterm"]
+mcp = ["dep:rmcp", "dep:schemars"]
+vectors = ["dep:zerocopy"]
+```
+
+Build without optional features: `cargo build --release --no-default-features`
+
+---
+
+## Testing
+
+```bash
+cargo test
+cargo clippy -- -D warnings
+```
+
+78 tests across all layers. Worker and MCP tests use mock LLM clients — no external services needed. Database tests use SQLite `:memory:`.
+
+---
+
+## License
 
 MIT

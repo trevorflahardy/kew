@@ -172,6 +172,17 @@ pub fn count_by_status(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>
     rows.collect()
 }
 
+/// Sum prompt and completion tokens across all completed tasks.
+/// Returns `(prompt_tokens, completion_tokens)`.
+pub fn sum_tokens(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) \
+         FROM tasks WHERE status = 'done'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

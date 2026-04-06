@@ -56,9 +56,11 @@ fn print_porcelain(db: &Database, db_size_kb: u64) {
         .map(|v| v.len())
         .unwrap_or(0);
     let embedding_count = db::vectors::count_embeddings(&conn).unwrap_or(0);
+    let (prompt_tokens, completion_tokens) =
+        db::tasks::sum_tokens(&conn).unwrap_or((0, 0));
 
     println!(
-        "pending={} running={} done={} failed={} context={} embeddings={} db={}",
+        "pending={} running={} done={} failed={} context={} embeddings={} db={} prompt_tokens={} completion_tokens={}",
         get("pending"),
         get("running"),
         get("done"),
@@ -66,6 +68,8 @@ fn print_porcelain(db: &Database, db_size_kb: u64) {
         context_count,
         embedding_count,
         format_size(db_size_kb),
+        prompt_tokens,
+        completion_tokens,
     );
 }
 
