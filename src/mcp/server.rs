@@ -273,7 +273,10 @@ impl KewMcpServer {
                 chain_id: None,
                 chain_index: None,
             };
-            db::tasks::create_task(&conn, &new).unwrap();
+            let created = db::tasks::create_task(&conn, &new).unwrap();
+            if let Some(name) = agent_name {
+                db::tasks::set_task_agent(&conn, &created.id, name).ok();
+            }
             db::tasks::claim_next_pending(&conn, "mcp")
                 .unwrap()
                 .expect("just-created task should be claimable")

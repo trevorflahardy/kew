@@ -74,5 +74,14 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type);
 "#;
 
+/// Migration 003: Add agent name column to tasks.
+pub const MIGRATION_003_AGENT: &str = r#"
+ALTER TABLE tasks ADD COLUMN agent TEXT;
+"#;
+
 /// All migrations in order.
-pub const MIGRATIONS: &[(&str, i64)] = &[(MIGRATION_001_CORE, 1), (MIGRATION_002_VECTORS, 2)];
+pub const MIGRATIONS: &[(&str, i64)] = &[
+    (MIGRATION_001_CORE, 1),
+    (MIGRATION_002_VECTORS, 2),
+    (MIGRATION_003_AGENT, 3),
+];

@@ -141,6 +141,60 @@ When asked for several things at once, map each to the right kew pattern:
 - **Don't re-do** work kew already completed — retrieve it with `kew_context_get`.
 - **Prefer `--wait`/blocking MCP calls** when you need the result in the same turn.
 
+## Model Tiers
+
+Configure named tiers in `kew_config.yaml`. Agents declare a tier; you control what model backs it:
+
+```yaml
+tiers:
+  fast: gemma3:27b          # low-latency: summaries, routing, classification
+  code: gemma4:26b          # code generation and debugging
+  smart: claude-sonnet-4-6  # complex reasoning, architecture decisions
+  embed: nomic-embed-text   # embeddings only (Ollama)
+```
+
+In agent YAMLs use `tier:` not a raw model name so swapping models only requires editing config:
+
+```yaml
+name: developer
+tier: code   # resolved to model at runtime via kew_config.yaml tiers
+```
+
+Claude does not auto-select models at runtime — agents declare their tier, you map tiers to models.
+
+## Subteams — Departments & Employees
+
+For tasks with 3+ independent workstreams, spawn a **department lead** Claude subagent per category.
+Each lead bulk-spawns kew workers. Results bubble up through shared context keys.
+
+```
+Claude (orchestrator)
+├── engineering lead (Claude subagent)  →  developer × N, tester × 1, debugger × 1
+├── docs lead (Claude subagent)         →  docs-writer × N, doc-audit × 1
+└── security lead (Claude subagent)     →  security × 1, error-finder × 1
+```
+
+**Spawning a department lead:**
+
+```jsonc
+// Claude spawns a subagent with this prompt:
+{
+  "subagent_type": "general-purpose",
+  "prompt": "You are the engineering lead for this task. Spawn these kew workers in parallel and collect their results:\n1. kew_run { agent: 'developer', prompt: '...', share_as: 'eng/feature' }\n2. kew_run { agent: 'tester', prompt: '...', share_as: 'eng/tests' }\nOnce done, retrieve with kew_context_get and return a combined summary."
+}
+```
+
+**Context key namespacing** — use dot-prefixed department paths to avoid collisions:
+
+| Department  | Key pattern     | Example              |
+|-------------|----------------|----------------------|
+| engineering | `eng/<task>`   | `eng/auth-refactor`  |
+| docs        | `docs/<topic>` | `docs/api-guide`     |
+| security    | `sec/<area>`   | `sec/auth-audit`     |
+| qa          | `qa/<target>`  | `qa/worker-pool`     |
+
+**When to use subteams:** 3+ independent workstreams that can run in parallel. For 1-2, prefer `kew chain` or direct parallel `kew_run` calls.
+
 ## Custom Agents
 
 Drop a YAML file in `.kew/agents/` to override a built-in or add a new specialist:
@@ -148,7 +202,7 @@ Drop a YAML file in `.kew/agents/` to override a built-in or add a new specialis
 ```yaml
 name: my-agent
 description: Short description shown in `kew agent list`
-model: gemma3:27b   # optional; overrides kew_config.yaml default
+tier: code   # use a tier name from kew_config.yaml (preferred over raw model)
 system_prompt: |
   You are a ...
 ```
@@ -448,11 +502,18 @@ embeddings=$(_get embeddings)
 db_size=$(_get db)
 prompt_tokens=$(_get prompt_tokens)
 completion_tokens=$(_get completion_tokens)
+agents_raw=$(_get agents)
 total_tokens=$(( ${prompt_tokens:-0} + ${completion_tokens:-0} ))
 
 parts=""
 if [ "${running:-0}" -gt 0 ]; then
-  parts="${parts}▶ ${running} "
+  if [ -n "$agents_raw" ]; then
+    # Show individual agent names separated by spaces
+    agent_list=$(printf '%s' "$agents_raw" | tr ',' ' ')
+    parts="${parts}▶ ${agent_list} "
+  else
+    parts="${parts}▶ ${running} "
+  fi
 else
   parts="${parts}▷ 0 "
 fi

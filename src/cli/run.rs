@@ -255,7 +255,10 @@ pub async fn execute(
             chain_id: None,
             chain_index: None,
         };
-        db::tasks::create_task(&conn, &new).context("failed to create task")?;
+        let created = db::tasks::create_task(&conn, &new).context("failed to create task")?;
+        if let Some(ref name) = args.agent {
+            db::tasks::set_task_agent(&conn, &created.id, name).ok();
+        }
         db::tasks::claim_next_pending(&conn, "cli")
             .context("failed to claim task")?
             .expect("just-created task should be claimable")

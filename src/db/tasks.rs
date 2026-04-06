@@ -39,6 +39,7 @@ fn task_from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         prompt_tokens: row.get("prompt_tokens")?,
         completion_tokens: row.get("completion_tokens")?,
         duration_ms: row.get("duration_ms")?,
+        agent: row.get("agent")?,
     })
 }
 
@@ -137,6 +138,23 @@ pub fn mark_failed(conn: &Connection, task_id: &str, error: &str) -> rusqlite::R
         "UPDATE tasks SET status = 'failed', error = ?2, completed_at = unixepoch('now') WHERE id = ?1 AND status IN ('assigned', 'running')",
         params![task_id, error],
     )
+}
+
+/// Set the agent name on a task (call immediately after create_task).
+pub fn set_task_agent(conn: &Connection, task_id: &str, agent: &str) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE tasks SET agent = ?2 WHERE id = ?1",
+        params![task_id, agent],
+    )
+}
+
+/// Return the distinct agent names for tasks currently assigned or running.
+pub fn running_agents(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT agent FROM tasks WHERE status IN ('assigned','running') AND agent IS NOT NULL ORDER BY agent",
+    )?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    rows.collect()
 }
 
 /// List tasks, optionally filtered by status.

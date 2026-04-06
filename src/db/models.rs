@@ -108,6 +108,7 @@ pub struct Task {
     pub prompt_tokens: Option<i32>,
     pub completion_tokens: Option<i32>,
     pub duration_ms: Option<i64>,
+    pub agent: Option<String>,
 }
 
 /// Parameters for creating a new task.
