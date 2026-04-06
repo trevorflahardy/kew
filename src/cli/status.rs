@@ -100,9 +100,19 @@ fn print_brief(db: &Database, db_size_kb: u64) {
         .unwrap_or(0);
     let embedding_count = db::vectors::count_embeddings(&conn).unwrap_or(0);
 
+    let (prompt_tokens, completion_tokens) =
+        db::tasks::sum_tokens(&conn).unwrap_or((0, 0));
+    let running_agents = db::tasks::running_agents(&conn)
+        .unwrap_or_default();
+
     println!("\n  context entries: {context_count}");
     println!("  embeddings:     {embedding_count}");
     println!("  db size:        {}", format_size(db_size_kb));
+    println!("\n  prompt tokens:     {prompt_tokens}");
+    println!("  completion tokens: {completion_tokens}");
+    if !running_agents.is_empty() {
+        println!("  running agents:    {}", running_agents.join(", "));
+    }
 }
 
 /// Read file size in KB (0 if unavailable).

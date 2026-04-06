@@ -30,26 +30,29 @@ done_count=$(_get done)
 failed=$(_get failed)
 context=$(_get context)
 embeddings=$(_get embeddings)
+db_size=$(_get db)
+agents=$(_get agents)
 
 parts=""
 if [ "${running:-0}" -gt 0 ]; then
-  parts="${parts}▶ ${running} "
-else
-  parts="${parts}▷ 0 "
+  parts="${parts}▶${running} "
 fi
 if [ "${pending:-0}" -gt 0 ]; then
   parts="${parts}⏳${pending} "
 fi
-parts="${parts}✓${done_count:-0}"
+if [ "${done_count:-0}" -gt 0 ]; then
+  parts="${parts}✓${done_count} "
+fi
 if [ "${failed:-0}" -gt 0 ]; then
-  parts="${parts} ✗${failed}"
+  parts="${parts}✗${failed} "
+fi
+if [ -z "$parts" ]; then
+  parts="idle "
 fi
 parts="${parts}  ctx:${context:-0} emb:${embeddings:-0}"
-
-if [ -f "$db_path" ]; then
-  db_indicator="DB:ok"
-else
-  db_indicator="DB:?"
+parts="${parts}  db:${db_size:-?}"
+if [ -n "$agents" ]; then
+  parts="${parts}  [${agents}]"
 fi
 
-printf "◆ kew  %s  %s" "$parts" "$db_indicator"
+printf "◆ kew  %s" "$parts"
