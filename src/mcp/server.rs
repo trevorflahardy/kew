@@ -50,7 +50,7 @@ struct RunParams {
     model: String,
     /// System prompt
     system: Option<String>,
-    /// Context keys to load
+    /// Context keys to load before executing (exact string keys from kew_context_set/kew_run share_as)
     #[serde(default)]
     context: Vec<String>,
     /// Store result as this context key
@@ -205,7 +205,7 @@ impl KewMcpServer {
 
     #[tool(
         name = "kew_context_get",
-        description = "Retrieve a shared context entry by key."
+        description = "Retrieve a shared context entry by key. If the key does not exist, returns an empty content string with namespace set to 'not_found' rather than an error."
     )]
     fn context_get(&self, Parameters(params): Parameters<ContextGetParams>) -> Json<ContextGetResult> {
         let conn = self.db.conn();
@@ -225,7 +225,7 @@ impl KewMcpServer {
 
     #[tool(
         name = "kew_context_set",
-        description = "Store a shared context entry that can be loaded by future tasks."
+        description = "Store a shared context entry that can be loaded by future tasks. Returns the key and byte count. NOTE: database write failures are silently ignored — always verify with kew_context_get if the write is critical."
     )]
     fn context_set(&self, Parameters(params): Parameters<ContextSetParams>) -> Json<ContextSetResult> {
         let conn = self.db.conn();
@@ -239,7 +239,7 @@ impl KewMcpServer {
 
     #[tool(
         name = "kew_context_search",
-        description = "Search stored results by semantic similarity. Returns the most relevant past task results."
+        description = "Semantic similarity search over stored task results and context entries. Uses natural language — the query is embedded via nomic-embed-text and compared by cosine similarity. If the embedding service is unreachable, returns an empty result set rather than an error."
     )]
     async fn context_search(
         &self,

@@ -35,6 +35,11 @@ impl fmt::Display for TaskStatus {
 }
 
 impl TaskStatus {
+    /// Parse a status string, defaulting to `Pending` for unrecognised values.
+    ///
+    /// This is intentionally lossy — it never returns an error. Unknown strings
+    /// (e.g. from a future schema version) silently become `Pending` rather than
+    /// crashing the reader. Use only when deserialising from the database.
     pub fn from_str_lossy(s: &str) -> Self {
         match s {
             "pending" => Self::Pending,
@@ -66,6 +71,11 @@ impl fmt::Display for Provider {
 }
 
 impl Provider {
+    /// Parse a provider string, defaulting to `Ollama` for unrecognised values.
+    ///
+    /// Intentionally lossy — unknown values (e.g. a future provider not yet in
+    /// this binary) fall back to Ollama rather than panicking. Use only when
+    /// deserialising from the database.
     pub fn from_str_lossy(s: &str) -> Self {
         match s {
             "claude" => Self::Claude,

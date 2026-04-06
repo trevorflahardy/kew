@@ -54,6 +54,17 @@ impl Worker {
     }
 
     /// Execute a task end-to-end. This is THE critical function.
+    ///
+    /// **Side effects** (always happen, regardless of success or failure):
+    /// - Marks the task `running` in the database at the start.
+    /// - Marks the task `done` or `failed` in the database at the end.
+    /// - Releases all file locks held by the task when execution finishes.
+    /// - On success, stores the result as a context entry if `task.share_as` is set.
+    /// - On success, best-effort embeds the result via Ollama for future vector search
+    ///   (failures here are logged and ignored).
+    ///
+    /// **Hardcoded LLM parameters:** `temperature = 0.3`, `max_tokens = 4096`. These
+    /// are not task-configurable — all tasks use the same values regardless of model.
     #[instrument(skip(self, task), fields(task_id = %task.id, model = %task.model))]
     pub async fn execute(&self, task: &Task) -> WorkResult {
         info!("executing task");

@@ -69,7 +69,12 @@ impl Database {
     }
 
     /// Get a reference to the inner connection (for synchronous operations).
-    /// Use with `tokio::task::spawn_blocking` in async contexts.
+    ///
+    /// # Panics
+    /// Panics if the mutex is poisoned (another thread panicked while holding it).
+    /// In practice this only happens if a previous operation panicked mid-transaction.
+    /// Use with `tokio::task::spawn_blocking` in async contexts — do NOT hold the
+    /// returned guard across `.await` points or you will deadlock.
     pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().expect("database mutex poisoned")
     }

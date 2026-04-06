@@ -48,6 +48,18 @@ pub fn store_embedding(
 }
 
 /// Search for the top-k most similar embeddings by cosine similarity.
+///
+/// All stored embeddings are loaded into memory and compared against
+/// `query_embedding` using cosine similarity computed in Rust.
+///
+/// **Dimension mismatch:** if a stored embedding has different dimensions than
+/// `query_embedding`, `cosine_similarity` returns `0.0` for that entry (the dot
+/// product of vectors of different lengths is treated as zero). It does **not**
+/// return an error — mismatched embeddings simply score last. Ensure all stored
+/// embeddings use the same model as the query.
+///
+/// `source_type` filters results to a specific type (e.g. `"task_result"`).
+/// Pass `None` to search across all types.
 pub fn search_similar(
     conn: &Connection,
     query_embedding: &[f32],

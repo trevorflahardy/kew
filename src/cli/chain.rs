@@ -63,7 +63,16 @@ impl ChainArgs {
         Duration::from_secs(600)
     }
 
-    /// Parse step specs. Format: "prompt" or "prompt:model".
+    /// Parse step specs into `ChainStep` values.
+    ///
+    /// **Format:** `"prompt text"` or `"prompt text:model-name"`.
+    ///
+    /// The split happens on the **last** `:` only if the part after it contains no
+    /// spaces (i.e. looks like a model name such as `gemma4:26b` or
+    /// `claude-sonnet-4-20250514`). If the suffix contains spaces it is treated as
+    /// part of the prompt, not a model name. This means a prompt that ends with a
+    /// colon followed by a non-space token will be misinterpreted — quote such
+    /// prompts or use `--model` instead.
     fn parse_steps(&self) -> Vec<ChainStep> {
         self.step
             .iter()

@@ -19,7 +19,19 @@ pub struct ChainStep {
 }
 
 /// Execute a chain of steps sequentially.
-/// Each step's result is shared as context for the next step.
+///
+/// Each step's output is stored as a context entry under the key
+/// `"{chain_id}-step-{N}"` (zero-indexed). The next step automatically loads
+/// the previous step's context key, injecting the result into its prompt as
+/// `[Shared context: {chain_id}-step-{N}]: {output}`.
+///
+/// **Early termination:** if any step fails, execution stops immediately and
+/// results collected so far are returned. Check `WorkResult::result` for
+/// `Err` to detect which step failed.
+///
+/// `chain_id` should be a unique identifier for this chain run (e.g. a ULID).
+/// It is used only as a namespace prefix for context keys — it is not persisted
+/// anywhere else.
 #[instrument(skip(db, ollama, claude, steps), fields(chain_len = steps.len()))]
 pub async fn execute_chain(
     db: &Database,

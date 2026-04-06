@@ -62,9 +62,20 @@ pub struct CompletionStats {
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     /// Send a chat completion request and return the full response.
+    ///
+    /// **Provider-specific behaviour for `system` roles:**
+    /// - `OllamaClient` passes all messages (including `role: "system"`) directly in the
+    ///   messages array, as Ollama's `/api/chat` endpoint accepts them inline.
+    /// - `ClaudeClient` extracts the first `role: "system"` message and promotes it to the
+    ///   top-level `system` field required by the Anthropic Messages API; any remaining system
+    ///   messages are dropped. Build prompts with at most one system message at index 0.
     async fn chat(&self, req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError>;
 
     /// Generate embeddings for the given texts.
+    ///
+    /// **Not supported by all providers.** `ClaudeClient` always returns
+    /// `Err(LlmError::ModelNotFound)` — embeddings must go through Ollama
+    /// (`nomic-embed-text` or similar).
     async fn embed(&self, model: &str, input: &[String]) -> Result<Vec<Vec<f32>>, LlmError>;
 
     /// List available models.

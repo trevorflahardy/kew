@@ -44,10 +44,15 @@ impl Pool {
         }
     }
 
-    /// Start the worker pool. Spawns N worker tokio tasks that pull
-    /// from the task channel and push results to the result channel.
+    /// Start the worker pool. Spawns N worker tokio tasks that pull from the task
+    /// channel and push results to the result channel.
     ///
-    /// Returns a handle to the result receiver.
+    /// Returns a handle to the result receiver. Callers must drive this receiver
+    /// to completion or workers will stall when the result buffer fills.
+    ///
+    /// # Panics
+    /// Panics if called more than once — the internal receivers are consumed on
+    /// the first call and cannot be restored.
     pub fn start(&mut self) -> mpsc::Receiver<WorkResult> {
         let task_rx = self.task_rx.take().expect("pool already started");
         let task_rx = Arc::new(tokio::sync::Mutex::new(task_rx));
@@ -95,7 +100,11 @@ impl Pool {
         self.task_tx.send(task).await
     }
 
-    /// Submit a task and wait for its result. Convenience method for single-task execution.
+    /// Submit a single task, wait for its result, then shut down the pool.
+    ///
+    /// Internally calls `start()` and then drops a clone of the task sender to
+    /// signal shutdown. This means the pool cannot be reused after this call —
+    /// workers will exit after the task completes.
     pub async fn submit_and_wait(&mut self, task: Task) -> WorkResult {
         let mut result_rx = self.start();
         self.task_tx.send(task).await.expect("pool channel closed");
