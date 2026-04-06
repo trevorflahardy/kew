@@ -597,10 +597,16 @@ fn inject_mcp_config(project_dir: &Path) -> Result<()> {
         settings["mcpServers"] = serde_json::json!({});
     }
 
-    // Add/update kew entry (don't clobber other servers)
+    // Add/update kew entry — use absolute path so the MCP server can be spawned
+    // from any working directory (Claude Code doesn't cd into the project first).
+    let db_path = project_dir
+        .canonicalize()
+        .unwrap_or_else(|_| project_dir.to_path_buf())
+        .join(".kew/kew.db");
+    let db_path_str = db_path.to_string_lossy();
     settings["mcpServers"]["kew"] = serde_json::json!({
         "command": "kew",
-        "args": ["mcp", "serve", "--db", ".kew/kew.db"]
+        "args": ["mcp", "serve", "--db", db_path_str]
     });
 
     // Write back
