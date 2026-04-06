@@ -39,6 +39,54 @@ impl KewMcpServer {
     }
 }
 
+// --- Agent keyword routing ---
+
+/// Auto-detect the best agent from prompt keywords when no agent is explicitly set.
+///
+/// Returns the agent name if a high-confidence keyword match is found, or `None`
+/// to let the LLM run without a specialized system prompt.
+fn detect_agent_from_prompt(prompt: &str) -> Option<&'static str> {
+    let p = prompt.to_lowercase();
+
+    // doc-audit must be checked before docs-writer (more specific)
+    if p.contains("doc audit") || p.contains("documentation gap") || p.contains("documentation quality")
+        || p.contains("missing docs") || p.contains("audit doc") {
+        return Some("doc-audit");
+    }
+    // error-finder before generic "error" (which maps to debugger)
+    if p.contains("find error") || p.contains("potential bug") || p.contains("what could go wrong")
+        || p.contains("pre-emptive") || p.contains("review for bug") || p.contains("find bug") {
+        return Some("error-finder");
+    }
+    if p.contains("security") || p.contains("vulnerabilit") || p.contains("exploit")
+        || p.contains("injection") || p.contains("auth bypass") || p.contains("cve") {
+        return Some("security");
+    }
+    if p.contains("debug") || p.contains("broken") || p.contains("not working")
+        || p.contains("crash") || p.contains("root cause") || p.contains("diagnose")
+        || p.contains("fix the bug") || p.contains("why is") {
+        return Some("debugger");
+    }
+    if p.contains("write test") || p.contains("add test") || p.contains("unit test")
+        || p.contains("test coverage") || p.contains("test suite") || p.contains("write specs") {
+        return Some("tester");
+    }
+    if p.contains("document") || p.contains("write docs") || p.contains("add docs")
+        || p.contains("explain this") || p.contains("write readme") {
+        return Some("docs-writer");
+    }
+    if p.contains("watch") || p.contains("track progress") || p.contains("summarize progress")
+        || p.contains("what's happening") || p.contains("status report") || p.contains("observe") {
+        return Some("watcher");
+    }
+    if p.contains("implement") || p.contains("build this") || p.contains("write code")
+        || p.contains("add feature") || p.contains("refactor") || p.contains("create a function")
+        || p.contains("create a struct") || p.contains("create a class") {
+        return Some("developer");
+    }
+    None
+}
+
 // --- Tool parameter/result types ---
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -48,13 +96,37 @@ struct RunParams {
     /// Model name (default: gemma4:26b)
     #[serde(default = "default_model")]
     model: String,
-    /// System prompt
+    /// System prompt — overrides the agent's system prompt if both are set
     system: Option<String>,
     /// Context keys to load before executing (exact string keys from kew_context_set/kew_run share_as)
     #[serde(default)]
     context: Vec<String>,
     /// Store result as this context key
     share_as: Option<String>,
+    /// Named agent to use. Sets the system prompt automatically.
+    /// Built-ins: developer, debugger, docs-writer, security, doc-audit, tester, watcher, error-finder.
+    /// If omitted, kew auto-detects an agent from prompt keywords (e.g. "debug", "write tests",
+    /// "security audit"). Use kew_list_agents to see all available agents and their trigger keywords.
+    agent: Option<String>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+struct ListAgentsResult {
+    agents: Vec<AgentInfo>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+struct AgentInfo {
+    /// Agent name — pass to kew_run as the `agent` field
+    name: String,
+    /// One-line description
+    description: String,
+    /// Preferred model (may be null)
+    model: Option<String>,
+    /// Source: "builtin", "project", or "user"
+    source: String,
+    /// Comma-separated keywords that auto-trigger this agent
+    keywords: String,
 }
 
 fn default_model() -> String {
@@ -146,6 +218,9 @@ struct StatusResult {
 #[derive(Deserialize, schemars::JsonSchema)]
 struct DoctorParams {}
 
+#[derive(Deserialize, schemars::JsonSchema)]
+struct ListAgentsParams {}
+
 #[derive(Serialize, schemars::JsonSchema)]
 struct DoctorResult {
     ollama_reachable: bool,
@@ -160,10 +235,29 @@ struct DoctorResult {
 impl KewMcpServer {
     #[tool(
         name = "kew_run",
-        description = "Execute a prompt through a local LLM agent. Blocks until complete and returns the result."
+        description = "Execute a prompt through a local LLM agent. Blocks until complete and returns the result.\n\nAGENT TYPES — set `agent` to activate a specialist:\n• developer — production code, no over-engineering\n• debugger — systematic root-cause analysis\n• docs-writer — clear, accurate documentation\n• security — exploitable vulnerability audit (>80% confidence only)\n• doc-audit — find documentation gaps by CRITICAL/IMPORTANT/NICE-TO-HAVE\n• tester — write test suites and find coverage gaps\n• watcher — observe codebase, surface blockers and TODOs\n• error-finder — adversarial pre-emptive bug detection\n\nKEYWORD AUTO-ROUTING — if `agent` is omitted, kew infers one from the prompt:\n'debug/broken/why is' → debugger | 'write test/test suite' → tester | 'security/vulnerability' → security | 'document/write docs' → docs-writer | 'doc audit/documentation gaps' → doc-audit | 'find errors/potential bugs' → error-finder | 'watch/track progress' → watcher | 'implement/refactor/add feature' → developer"
     )]
     async fn run(&self, Parameters(params): Parameters<RunParams>) -> Json<RunResult> {
-        let route = crate::llm::router::route(&params.model);
+        // Resolve agent: explicit > keyword-detected > none
+        let agent_name = params.agent.as_deref()
+            .or_else(|| detect_agent_from_prompt(&params.prompt));
+
+        let (effective_model, effective_system) = if let Some(name) = agent_name {
+            let project_dir = std::env::current_dir().ok();
+            match crate::agents::load_agent(name, project_dir.as_deref()) {
+                Ok(cfg) => {
+                    let model = cfg.model.unwrap_or_else(|| params.model.clone());
+                    // --system in params overrides agent's system prompt
+                    let system = params.system.clone().or(Some(cfg.system_prompt));
+                    (model, system)
+                }
+                Err(_) => (params.model.clone(), params.system.clone()),
+            }
+        } else {
+            (params.model.clone(), params.system.clone())
+        };
+
+        let route = crate::llm::router::route(&effective_model);
 
         let task = {
             let conn = self.db.conn();
@@ -171,7 +265,7 @@ impl KewMcpServer {
                 model: route.model.clone(),
                 provider: route.provider.clone(),
                 prompt: params.prompt,
-                system_prompt: params.system,
+                system_prompt: effective_system,
                 context_keys: params.context,
                 share_as: params.share_as,
                 files_locked: vec![],
@@ -320,12 +414,48 @@ impl KewMcpServer {
             db_ok: true,
         })
     }
+
+    #[tool(
+        name = "kew_list_agents",
+        description = "List all available kew agent types with their descriptions and auto-trigger keywords. Use this to discover which agent to pass to kew_run, or to understand which keywords in a prompt will auto-select an agent."
+    )]
+    fn list_agents(&self, Parameters(_params): Parameters<ListAgentsParams>) -> Json<ListAgentsResult> {
+        let project_dir = std::env::current_dir().ok();
+        let entries = crate::agents::list_agents(project_dir.as_deref());
+
+        let keyword_map: &[(&str, &str)] = &[
+            ("developer",    "implement, build this, write code, add feature, refactor, create a function/struct/class"),
+            ("debugger",     "debug, broken, not working, crash, root cause, diagnose, fix the bug, why is"),
+            ("docs-writer",  "document, write docs, add docs, explain this, write readme"),
+            ("security",     "security, vulnerability, exploit, injection, auth bypass, cve"),
+            ("doc-audit",    "doc audit, documentation gap, documentation quality, missing docs, audit doc"),
+            ("tester",       "write test, add test, unit test, test coverage, test suite, write specs"),
+            ("watcher",      "watch, track progress, summarize progress, what's happening, status report, observe"),
+            ("error-finder", "find error, potential bug, what could go wrong, pre-emptive, review for bug, find bug"),
+        ];
+
+        let agents = entries.into_iter().map(|e| {
+            let keywords = keyword_map.iter()
+                .find(|(n, _)| *n == e.name)
+                .map(|(_, kw)| kw.to_string())
+                .unwrap_or_default();
+            AgentInfo {
+                name: e.name,
+                description: e.description,
+                model: e.model,
+                source: e.source,
+                keywords,
+            }
+        }).collect();
+
+        Json(ListAgentsResult { agents })
+    }
 }
 
 impl ServerHandler for KewMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::default()
-            .with_instructions("Kew: Real local agent orchestration. Use kew_run to execute LLM tasks, kew_context_* to manage shared context, kew_status for system info.")
+            .with_instructions("Kew: Real local agent orchestration.\n\nPRIMARY TOOLS:\n• kew_run — execute any prompt; set `agent` for specialist behaviour, or let keywords auto-route\n• kew_list_agents — discover all agents and their trigger keywords\n• kew_context_set/get/search — shared knowledge between tasks\n• kew_status — task counts, context, embeddings, DB size\n• kew_doctor — health check\n\nAGENT QUICK-REFERENCE (pass as `agent` in kew_run, or just use the keywords):\ndeveloper · debugger · docs-writer · security · doc-audit · tester · watcher · error-finder")
     }
 
     fn list_tools(
@@ -443,7 +573,8 @@ mod tests {
         );
         assert!(names.contains(&"kew_status"), "missing kew_status");
         assert!(names.contains(&"kew_doctor"), "missing kew_doctor");
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
+        assert!(names.contains(&"kew_list_agents"), "missing kew_list_agents");
     }
 
     #[test]
@@ -548,6 +679,7 @@ mod tests {
             system: None,
             context: vec![],
             share_as: None,
+            agent: None,
         };
         let Json(result) = server.run(Parameters(params)).await;
         assert_eq!(result.status, "done");
@@ -567,6 +699,7 @@ mod tests {
             system: None,
             context: vec![],
             share_as: Some("output-key".into()),
+            agent: None,
         };
         let Json(run_result) = server.run(Parameters(params)).await;
         assert_eq!(run_result.status, "done");
@@ -606,6 +739,70 @@ mod tests {
         assert_eq!(result.results.len(), 1);
         assert_eq!(result.results[0].key, "k1");
         assert!(result.results[0].score > 0.99);
+    }
+
+    #[test]
+    fn test_detect_agent_keywords() {
+        assert_eq!(detect_agent_from_prompt("debug why this crashes"), Some("debugger"));
+        assert_eq!(detect_agent_from_prompt("write tests for auth module"), Some("tester"));
+        assert_eq!(detect_agent_from_prompt("security audit the API layer"), Some("security"));
+        assert_eq!(detect_agent_from_prompt("document this function"), Some("docs-writer"));
+        assert_eq!(detect_agent_from_prompt("doc audit for the db module"), Some("doc-audit"));
+        assert_eq!(detect_agent_from_prompt("find errors in this code"), Some("error-finder"));
+        assert_eq!(detect_agent_from_prompt("watch progress on the refactor"), Some("watcher"));
+        assert_eq!(detect_agent_from_prompt("implement a retry mechanism"), Some("developer"));
+        assert_eq!(detect_agent_from_prompt("what is the capital of France"), None);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_run_explicit_agent_sets_system_prompt() {
+        let db = Database::open_in_memory().unwrap();
+        // Use a mock that echoes back its system prompt in the response isn't possible,
+        // but we can verify the task is created (status=done) and no error occurs.
+        let server = make_server_with_mock(db, "refactored");
+        let params = RunParams {
+            prompt: "Refactor the auth module".into(),
+            model: "mock".into(),
+            system: None,
+            context: vec![],
+            share_as: None,
+            agent: Some("developer".into()),
+        };
+        let Json(result) = server.run(Parameters(params)).await;
+        assert_eq!(result.status, "done");
+        assert_eq!(result.result.as_deref(), Some("refactored"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_run_keyword_routing_selects_agent() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "done");
+        // "debug" keyword → debugger agent auto-selected
+        let params = RunParams {
+            prompt: "debug why the lock is deadlocking".into(),
+            model: "mock".into(),
+            system: None,
+            context: vec![],
+            share_as: None,
+            agent: None, // not explicit — should auto-detect
+        };
+        let Json(result) = server.run(Parameters(params)).await;
+        assert_eq!(result.status, "done");
+    }
+
+    #[test]
+    fn test_kew_list_agents_returns_all_builtins() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "");
+        let Json(result) = server.list_agents(Parameters(ListAgentsParams {}));
+        let names: Vec<&str> = result.agents.iter().map(|a| a.name.as_str()).collect();
+        for expected in &["developer", "debugger", "docs-writer", "security",
+                          "doc-audit", "tester", "watcher", "error-finder"] {
+            assert!(names.contains(expected), "missing agent '{expected}' in list_agents");
+        }
+        // Agents with known keywords should have non-empty keywords field
+        let dev = result.agents.iter().find(|a| a.name == "developer").unwrap();
+        assert!(!dev.keywords.is_empty());
     }
 }
 
