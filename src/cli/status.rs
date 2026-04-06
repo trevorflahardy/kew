@@ -56,8 +56,7 @@ fn print_porcelain(db: &Database, db_size_kb: u64) {
         .map(|v| v.len())
         .unwrap_or(0);
     let embedding_count = db::vectors::count_embeddings(&conn).unwrap_or(0);
-    let (prompt_tokens, completion_tokens) =
-        db::tasks::sum_tokens(&conn).unwrap_or((0, 0));
+    let (prompt_tokens, completion_tokens) = db::tasks::sum_tokens(&conn).unwrap_or((0, 0));
 
     let running_agents = db::tasks::running_agents(&conn)
         .unwrap_or_default()
@@ -100,10 +99,8 @@ fn print_brief(db: &Database, db_size_kb: u64) {
         .unwrap_or(0);
     let embedding_count = db::vectors::count_embeddings(&conn).unwrap_or(0);
 
-    let (prompt_tokens, completion_tokens) =
-        db::tasks::sum_tokens(&conn).unwrap_or((0, 0));
-    let running_agents = db::tasks::running_agents(&conn)
-        .unwrap_or_default();
+    let (prompt_tokens, completion_tokens) = db::tasks::sum_tokens(&conn).unwrap_or((0, 0));
+    let running_agents = db::tasks::running_agents(&conn).unwrap_or_default();
 
     println!("\n  context entries: {context_count}");
     println!("  embeddings:     {embedding_count}");

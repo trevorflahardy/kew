@@ -49,39 +49,79 @@ fn detect_agent_from_prompt(prompt: &str) -> Option<&'static str> {
     let p = prompt.to_lowercase();
 
     // doc-audit must be checked before docs-writer (more specific)
-    if p.contains("doc audit") || p.contains("documentation gap") || p.contains("documentation quality")
-        || p.contains("missing docs") || p.contains("audit doc") {
+    if p.contains("doc audit")
+        || p.contains("documentation gap")
+        || p.contains("documentation quality")
+        || p.contains("missing docs")
+        || p.contains("audit doc")
+    {
         return Some("doc-audit");
     }
     // error-finder before generic "error" (which maps to debugger)
-    if p.contains("find error") || p.contains("potential bug") || p.contains("what could go wrong")
-        || p.contains("pre-emptive") || p.contains("review for bug") || p.contains("find bug") {
+    if p.contains("find error")
+        || p.contains("potential bug")
+        || p.contains("what could go wrong")
+        || p.contains("pre-emptive")
+        || p.contains("review for bug")
+        || p.contains("find bug")
+    {
         return Some("error-finder");
     }
-    if p.contains("security") || p.contains("vulnerabilit") || p.contains("exploit")
-        || p.contains("injection") || p.contains("auth bypass") || p.contains("cve") {
+    if p.contains("security")
+        || p.contains("vulnerabilit")
+        || p.contains("exploit")
+        || p.contains("injection")
+        || p.contains("auth bypass")
+        || p.contains("cve")
+    {
         return Some("security");
     }
-    if p.contains("debug") || p.contains("broken") || p.contains("not working")
-        || p.contains("crash") || p.contains("root cause") || p.contains("diagnose")
-        || p.contains("fix the bug") || p.contains("why is") {
+    if p.contains("debug")
+        || p.contains("broken")
+        || p.contains("not working")
+        || p.contains("crash")
+        || p.contains("root cause")
+        || p.contains("diagnose")
+        || p.contains("fix the bug")
+        || p.contains("why is")
+    {
         return Some("debugger");
     }
-    if p.contains("write test") || p.contains("add test") || p.contains("unit test")
-        || p.contains("test coverage") || p.contains("test suite") || p.contains("write specs") {
+    if p.contains("write test")
+        || p.contains("add test")
+        || p.contains("unit test")
+        || p.contains("test coverage")
+        || p.contains("test suite")
+        || p.contains("write specs")
+    {
         return Some("tester");
     }
-    if p.contains("document") || p.contains("write docs") || p.contains("add docs")
-        || p.contains("explain this") || p.contains("write readme") {
+    if p.contains("document")
+        || p.contains("write docs")
+        || p.contains("add docs")
+        || p.contains("explain this")
+        || p.contains("write readme")
+    {
         return Some("docs-writer");
     }
-    if p.contains("watch") || p.contains("track progress") || p.contains("summarize progress")
-        || p.contains("what's happening") || p.contains("status report") || p.contains("observe") {
+    if p.contains("watch")
+        || p.contains("track progress")
+        || p.contains("summarize progress")
+        || p.contains("what's happening")
+        || p.contains("status report")
+        || p.contains("observe")
+    {
         return Some("watcher");
     }
-    if p.contains("implement") || p.contains("build this") || p.contains("write code")
-        || p.contains("add feature") || p.contains("refactor") || p.contains("create a function")
-        || p.contains("create a struct") || p.contains("create a class") {
+    if p.contains("implement")
+        || p.contains("build this")
+        || p.contains("write code")
+        || p.contains("add feature")
+        || p.contains("refactor")
+        || p.contains("create a function")
+        || p.contains("create a struct")
+        || p.contains("create a class")
+    {
         return Some("developer");
     }
     None
@@ -239,7 +279,9 @@ impl KewMcpServer {
     )]
     async fn run(&self, Parameters(params): Parameters<RunParams>) -> Json<RunResult> {
         // Resolve agent: explicit > keyword-detected > none
-        let agent_name = params.agent.as_deref()
+        let agent_name = params
+            .agent
+            .as_deref()
             .or_else(|| detect_agent_from_prompt(&params.prompt));
 
         let (effective_model, effective_system) = if let Some(name) = agent_name {
@@ -422,7 +464,10 @@ impl KewMcpServer {
         name = "kew_list_agents",
         description = "List all available kew agent types with their descriptions and auto-trigger keywords. Use this to discover which agent to pass to kew_run, or to understand which keywords in a prompt will auto-select an agent."
     )]
-    fn list_agents(&self, Parameters(_params): Parameters<ListAgentsParams>) -> Json<ListAgentsResult> {
+    fn list_agents(
+        &self,
+        Parameters(_params): Parameters<ListAgentsParams>,
+    ) -> Json<ListAgentsResult> {
         let project_dir = std::env::current_dir().ok();
         let entries = crate::agents::list_agents(project_dir.as_deref());
 
@@ -437,19 +482,23 @@ impl KewMcpServer {
             ("error-finder", "find error, potential bug, what could go wrong, pre-emptive, review for bug, find bug"),
         ];
 
-        let agents = entries.into_iter().map(|e| {
-            let keywords = keyword_map.iter()
-                .find(|(n, _)| *n == e.name)
-                .map(|(_, kw)| kw.to_string())
-                .unwrap_or_default();
-            AgentInfo {
-                name: e.name,
-                description: e.description,
-                model: e.model,
-                source: e.source,
-                keywords,
-            }
-        }).collect();
+        let agents = entries
+            .into_iter()
+            .map(|e| {
+                let keywords = keyword_map
+                    .iter()
+                    .find(|(n, _)| *n == e.name)
+                    .map(|(_, kw)| kw.to_string())
+                    .unwrap_or_default();
+                AgentInfo {
+                    name: e.name,
+                    description: e.description,
+                    model: e.model,
+                    source: e.source,
+                    keywords,
+                }
+            })
+            .collect();
 
         Json(ListAgentsResult { agents })
     }
@@ -577,7 +626,10 @@ mod tests {
         assert!(names.contains(&"kew_status"), "missing kew_status");
         assert!(names.contains(&"kew_doctor"), "missing kew_doctor");
         assert_eq!(tools.len(), 7);
-        assert!(names.contains(&"kew_list_agents"), "missing kew_list_agents");
+        assert!(
+            names.contains(&"kew_list_agents"),
+            "missing kew_list_agents"
+        );
     }
 
     #[test]
@@ -746,15 +798,42 @@ mod tests {
 
     #[test]
     fn test_detect_agent_keywords() {
-        assert_eq!(detect_agent_from_prompt("debug why this crashes"), Some("debugger"));
-        assert_eq!(detect_agent_from_prompt("write tests for auth module"), Some("tester"));
-        assert_eq!(detect_agent_from_prompt("security audit the API layer"), Some("security"));
-        assert_eq!(detect_agent_from_prompt("document this function"), Some("docs-writer"));
-        assert_eq!(detect_agent_from_prompt("doc audit for the db module"), Some("doc-audit"));
-        assert_eq!(detect_agent_from_prompt("find errors in this code"), Some("error-finder"));
-        assert_eq!(detect_agent_from_prompt("watch progress on the refactor"), Some("watcher"));
-        assert_eq!(detect_agent_from_prompt("implement a retry mechanism"), Some("developer"));
-        assert_eq!(detect_agent_from_prompt("what is the capital of France"), None);
+        assert_eq!(
+            detect_agent_from_prompt("debug why this crashes"),
+            Some("debugger")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("write tests for auth module"),
+            Some("tester")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("security audit the API layer"),
+            Some("security")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("document this function"),
+            Some("docs-writer")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("doc audit for the db module"),
+            Some("doc-audit")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("find errors in this code"),
+            Some("error-finder")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("watch progress on the refactor"),
+            Some("watcher")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("implement a retry mechanism"),
+            Some("developer")
+        );
+        assert_eq!(
+            detect_agent_from_prompt("what is the capital of France"),
+            None
+        );
     }
 
     #[tokio::test]
@@ -799,12 +878,27 @@ mod tests {
         let server = make_server_with_mock(db, "");
         let Json(result) = server.list_agents(Parameters(ListAgentsParams {}));
         let names: Vec<&str> = result.agents.iter().map(|a| a.name.as_str()).collect();
-        for expected in &["developer", "debugger", "docs-writer", "security",
-                          "doc-audit", "tester", "watcher", "error-finder"] {
-            assert!(names.contains(expected), "missing agent '{expected}' in list_agents");
+        for expected in &[
+            "developer",
+            "debugger",
+            "docs-writer",
+            "security",
+            "doc-audit",
+            "tester",
+            "watcher",
+            "error-finder",
+        ] {
+            assert!(
+                names.contains(expected),
+                "missing agent '{expected}' in list_agents"
+            );
         }
         // Agents with known keywords should have non-empty keywords field
-        let dev = result.agents.iter().find(|a| a.name == "developer").unwrap();
+        let dev = result
+            .agents
+            .iter()
+            .find(|a| a.name == "developer")
+            .unwrap();
         assert!(!dev.keywords.is_empty());
     }
 }
