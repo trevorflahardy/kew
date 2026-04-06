@@ -48,25 +48,30 @@ pub fn get_context(conn: &Connection, key: &str) -> rusqlite::Result<Option<Cont
 }
 
 /// Load multiple context entries by keys.
+///
+/// Keys are chunked into batches of 500 to stay well under SQLite's
+/// SQLITE_MAX_VARIABLE_NUMBER limit (default 999).
 pub fn get_context_many(conn: &Connection, keys: &[String]) -> rusqlite::Result<Vec<ContextEntry>> {
     if keys.is_empty() {
         return Ok(vec![]);
     }
 
-    let placeholders: Vec<String> = (1..=keys.len()).map(|i| format!("?{i}")).collect();
-    let sql = format!(
-        "SELECT * FROM context WHERE key IN ({})",
-        placeholders.join(",")
-    );
-
-    let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<&dyn rusqlite::types::ToSql> = keys
-        .iter()
-        .map(|k| k as &dyn rusqlite::types::ToSql)
-        .collect();
-    let rows = stmt.query_map(params.as_slice(), context_from_row)?;
-
-    rows.collect()
+    let mut all_entries = Vec::new();
+    for chunk in keys.chunks(500) {
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT * FROM context WHERE key IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            chunk.iter().map(|k| k as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt.query_map(params.as_slice(), context_from_row)?;
+        for row in rows {
+            all_entries.push(row?);
+        }
+    }
+    Ok(all_entries)
 }
 
 /// List all context entries, optionally filtered by namespace.

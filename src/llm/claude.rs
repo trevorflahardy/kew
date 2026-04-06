@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -11,7 +12,7 @@ use super::{ChatMessage, ChatRequest, ChatResponse, CompletionStats, LlmClient, 
 
 pub struct ClaudeClient {
     client: Client,
-    api_key: String,
+    api_key: SecretString,
     base_url: String,
 }
 
@@ -22,7 +23,7 @@ impl ClaudeClient {
                 .timeout(std::time::Duration::from_secs(600))
                 .build()
                 .expect("failed to build HTTP client"),
-            api_key: api_key.to_string(),
+            api_key: SecretString::from(api_key.to_string()),
             base_url: "https://api.anthropic.com".to_string(),
         }
     }
@@ -108,7 +109,7 @@ impl LlmClient for ClaudeClient {
         let response = self
             .client
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", self.api_key.expose_secret())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -195,7 +196,7 @@ impl LlmClient for ClaudeClient {
         let response = self
             .client
             .get(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", self.api_key.expose_secret())
             .header("anthropic-version", "2023-06-01")
             .send()
             .await

@@ -84,7 +84,19 @@ impl RunArgs {
         }
 
         if let Some(ref path) = self.file {
-            return std::fs::read_to_string(path)
+            let base = std::env::current_dir()
+                .with_context(|| "cannot determine working directory")?
+                .canonicalize()
+                .with_context(|| "cannot canonicalize working directory")?;
+            let resolved = path
+                .canonicalize()
+                .with_context(|| format!("cannot resolve path {}", path.display()))?;
+            anyhow::ensure!(
+                resolved.starts_with(&base),
+                "file path '{}' is outside the working directory — rejected for security",
+                path.display()
+            );
+            return std::fs::read_to_string(&resolved)
                 .with_context(|| format!("reading prompt from {}", path.display()));
         }
 
@@ -180,13 +192,15 @@ mod tests {
 
     #[test]
     fn test_resolve_prompt_from_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("prompt.txt");
+        // Write the file inside cwd so the path-traversal check passes.
+        let cwd = std::env::current_dir().unwrap();
+        let file_path = cwd.join("_test_prompt_tmp.txt");
         std::fs::write(&file_path, "file prompt content").unwrap();
-
         let mut args = make_args(None, "5m");
-        args.file = Some(file_path);
-        assert_eq!(args.resolve_prompt().unwrap(), "file prompt content");
+        args.file = Some(file_path.clone());
+        let result = args.resolve_prompt().unwrap();
+        std::fs::remove_file(&file_path).ok();
+        assert_eq!(result, "file prompt content");
     }
 
     #[test]
@@ -259,9 +273,11 @@ pub async fn execute(
         if let Some(ref name) = args.agent {
             db::tasks::set_task_agent(&conn, &created.id, name).ok();
         }
-        db::tasks::claim_next_pending(&conn, "cli")
+        db::tasks::claim_task_by_id(&conn, &created.id, "cli")
             .context("failed to claim task")?
-            .expect("just-created task should be claimable")
+            .ok_or_else(|| {
+                anyhow::anyhow!("task was claimed by another worker before CLI could run it")
+            })?
     };
 
     if args.wait {
@@ -287,8 +303,8 @@ pub async fn execute(
         let timeout = args.parse_timeout();
         let mut pool = Pool::new(db.clone(), ollama, claude, 1);
         let result = tokio::time::timeout(timeout, async {
-            let results = pool.submit_all_and_wait(vec![task]).await;
-            results.into_iter().next().expect("submitted 1 task")
+            let results = pool.submit_all_and_wait(vec![task]).await?;
+            anyhow::Ok(results.into_iter().next().expect("submitted 1 task"))
         })
         .await;
 
@@ -297,7 +313,7 @@ pub async fn execute(
         }
 
         match result {
-            Ok(work_result) => match work_result.result {
+            Ok(Ok(work_result)) => match work_result.result {
                 Ok(text) => {
                     if args.json {
                         let json = serde_json::json!({
@@ -327,6 +343,9 @@ pub async fn execute(
                     anyhow::bail!("task failed: {err}");
                 }
             },
+            Ok(Err(e)) => {
+                anyhow::bail!("pool error: {e}");
+            }
             Err(_) => {
                 anyhow::bail!("timeout after {:?}", args.parse_timeout());
             }

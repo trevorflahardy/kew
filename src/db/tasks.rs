@@ -101,6 +101,26 @@ pub fn claim_next_pending(conn: &Connection, worker_id: &str) -> rusqlite::Resul
     .optional()
 }
 
+/// Atomically claim a specific task by ID for a worker.
+///
+/// Only succeeds if the task is still in `pending` status — returns `None`
+/// if another worker already claimed it.
+pub fn claim_task_by_id(
+    conn: &Connection,
+    task_id: &str,
+    worker_id: &str,
+) -> rusqlite::Result<Option<Task>> {
+    conn.query_row(
+        "UPDATE tasks
+         SET status = 'assigned', worker_id = ?2, started_at = unixepoch('now')
+         WHERE id = ?1 AND status = 'pending'
+         RETURNING *",
+        params![task_id, worker_id],
+        task_from_row,
+    )
+    .optional()
+}
+
 /// Transition a task to 'running'.
 pub fn mark_running(conn: &Connection, task_id: &str) -> rusqlite::Result<usize> {
     conn.execute(

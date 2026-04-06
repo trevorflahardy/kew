@@ -2,7 +2,7 @@
 # See: https://github.com/futur/kew
 
 defaults:
-  model: gemma3:27b
+  model: gemma4:26b
   provider: ollama
   workers: 4
   timeout: 5m
@@ -13,7 +13,7 @@ ollama:
 
 # Model aliases
 aliases:
-  fast: gemma3:27b
+  fast: gemma4:26b
   # smart: claude-sonnet-4-20250514
   # code: codellama
 

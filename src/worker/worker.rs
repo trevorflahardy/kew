@@ -4,7 +4,7 @@
 //! calls the LLM, stores the result, and optionally shares it as context.
 
 use std::sync::Arc;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::db::models::{Provider, Task};
 use crate::db::{self, Database};
@@ -114,9 +114,16 @@ impl Worker {
                 let conn = self.db.conn();
                 let mut err = None;
                 for path in &task.files_locked {
-                    if !db::locks::acquire_lock(&conn, path, &task.id, 600).unwrap_or(false) {
-                        err = Some(format!("could not acquire lock on {path}"));
-                        break;
+                    match db::locks::acquire_lock(&conn, path, &task.id, 600) {
+                        Ok(true) => {} // acquired
+                        Ok(false) => {
+                            err = Some(format!("could not acquire lock on {path}"));
+                            break;
+                        }
+                        Err(e) => {
+                            err = Some(format!("lock DB error on {path}: {e}"));
+                            break;
+                        }
                     }
                 }
                 err
@@ -162,33 +169,49 @@ impl Worker {
             Ok((response, stats)) => {
                 let result_text = response.message.content.clone();
 
-                // Store result in DB
-                {
+                // Re-check task status — it may have been cancelled during the LLM await.
+                // If it's no longer 'running', skip mark_done and context storage to avoid
+                // polluting shared context with results from a cancelled task.
+                let still_running = {
                     let conn = self.db.conn();
-                    if let Err(e) = db::tasks::mark_done(
-                        &conn,
-                        &task.id,
-                        &result_text,
-                        stats.prompt_tokens,
-                        stats.completion_tokens,
-                        stats.duration_ms,
-                    ) {
-                        error!("failed to mark task done: {e}");
-                    }
-                }
+                    db::tasks::get_task(&conn, &task.id)
+                        .ok()
+                        .flatten()
+                        .map(|t| t.status == crate::db::models::TaskStatus::Running)
+                        .unwrap_or(false)
+                };
 
-                // Share result as context if requested
-                if let Some(ref share_key) = task.share_as {
-                    let conn = self.db.conn();
-                    if let Err(e) = db::context::put_context(
-                        &conn,
-                        share_key,
-                        "default",
-                        &result_text,
-                        Some(&task.id),
-                    ) {
-                        error!("failed to share context as '{share_key}': {e}");
+                if still_running {
+                    // Store result in DB
+                    {
+                        let conn = self.db.conn();
+                        if let Err(e) = db::tasks::mark_done(
+                            &conn,
+                            &task.id,
+                            &result_text,
+                            stats.prompt_tokens,
+                            stats.completion_tokens,
+                            stats.duration_ms,
+                        ) {
+                            error!("failed to mark task done: {e}");
+                        }
                     }
+
+                    // Share result as context if requested
+                    if let Some(ref share_key) = task.share_as {
+                        let conn = self.db.conn();
+                        if let Err(e) = db::context::put_context(
+                            &conn,
+                            share_key,
+                            "default",
+                            &result_text,
+                            Some(&task.id),
+                        ) {
+                            error!("failed to share context as '{share_key}': {e}");
+                        }
+                    }
+                } else {
+                    debug!(task_id = %task.id, "task was cancelled during LLM call; skipping mark_done and context storage");
                 }
 
                 // Auto-embed result for future vector search (best-effort)
@@ -238,14 +261,14 @@ impl Worker {
                     &embeddings[0],
                     "nomic-embed-text",
                 ) {
-                    debug!("failed to store embedding: {e}");
+                    warn!("failed to store embedding: {e}");
                 }
             }
             Ok(_) => {
-                debug!("embedding model returned empty vector, skipping");
+                warn!("embedding model returned empty vector, skipping");
             }
             Err(e) => {
-                debug!("embedding failed (non-fatal): {e}");
+                warn!("embedding failed (non-fatal): {e}");
             }
         }
     }

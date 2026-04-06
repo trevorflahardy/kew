@@ -1,5 +1,6 @@
 //! Worker pool: manages N concurrent workers as tokio tasks.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
@@ -20,6 +21,7 @@ pub struct Pool {
     task_rx: Option<mpsc::Receiver<Task>>,
     result_tx: mpsc::Sender<WorkResult>,
     result_rx: Option<mpsc::Receiver<WorkResult>>,
+    started: AtomicBool,
 }
 
 impl Pool {
@@ -41,6 +43,7 @@ impl Pool {
             task_rx: Some(task_rx),
             result_tx,
             result_rx: Some(result_rx),
+            started: AtomicBool::new(false),
         }
     }
 
@@ -50,10 +53,15 @@ impl Pool {
     /// Returns a handle to the result receiver. Callers must drive this receiver
     /// to completion or workers will stall when the result buffer fills.
     ///
-    /// # Panics
-    /// Panics if called more than once — the internal receivers are consumed on
-    /// the first call and cannot be restored.
-    pub fn start(&mut self) -> mpsc::Receiver<WorkResult> {
+    /// Returns an error if called more than once.
+    pub fn start(&mut self) -> anyhow::Result<mpsc::Receiver<WorkResult>> {
+        if self
+            .started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            anyhow::bail!("pool already started");
+        }
         let task_rx = self.task_rx.take().expect("pool already started");
         let task_rx = Arc::new(tokio::sync::Mutex::new(task_rx));
         let result_rx = self.result_rx.take().expect("pool already started");
@@ -92,7 +100,7 @@ impl Pool {
         }
 
         info!(workers = self.size, "pool started");
-        result_rx
+        Ok(result_rx)
     }
 
     /// Submit a task to the pool.
@@ -105,18 +113,18 @@ impl Pool {
     /// Internally calls `start()` and then drops a clone of the task sender to
     /// signal shutdown. This means the pool cannot be reused after this call —
     /// workers will exit after the task completes.
-    pub async fn submit_and_wait(&mut self, task: Task) -> WorkResult {
-        let mut result_rx = self.start();
+    pub async fn submit_and_wait(&mut self, task: Task) -> anyhow::Result<WorkResult> {
+        let mut result_rx = self.start()?;
         self.task_tx.send(task).await.expect("pool channel closed");
         // Drop the sender so workers know no more tasks are coming
         drop(self.task_tx.clone()); // Clone first since we need it for the struct
-        result_rx.recv().await.expect("no result received")
+        Ok(result_rx.recv().await.expect("no result received"))
     }
 
     /// Submit multiple tasks and wait for all results.
-    pub async fn submit_all_and_wait(&mut self, tasks: Vec<Task>) -> Vec<WorkResult> {
+    pub async fn submit_all_and_wait(&mut self, tasks: Vec<Task>) -> anyhow::Result<Vec<WorkResult>> {
         let count = tasks.len();
-        let mut result_rx = self.start();
+        let mut result_rx = self.start()?;
 
         for task in tasks {
             self.task_tx.send(task).await.expect("pool channel closed");
@@ -135,7 +143,7 @@ impl Pool {
         }
 
         info!(count = results.len(), "all tasks completed");
-        results
+        Ok(results)
     }
 }
 
@@ -228,7 +236,7 @@ mod tests {
         let test_tasks = create_test_tasks(&db, 3);
 
         let mut pool = Pool::new(db, client.clone(), None, 2);
-        let results = pool.submit_all_and_wait(test_tasks).await;
+        let results = pool.submit_all_and_wait(test_tasks).await.unwrap();
 
         assert_eq!(results.len(), 3);
         for r in &results {
