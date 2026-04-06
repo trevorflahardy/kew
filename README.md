@@ -95,15 +95,15 @@ Kew runs as a Model Context Protocol server, letting Claude Code call it directl
 
 Available tools:
 
-| Tool | Description |
-|------|-------------|
-| `kew_run` | Execute a prompt through any model, returns result |
-| `kew_context_get` | Read a shared context entry by key |
-| `kew_context_set` | Write a shared context entry |
-| `kew_context_search` | Vector similarity search over stored knowledge |
-| `kew_status` | Task counts, context entries, embedding stats |
-| `kew_doctor` | Health check — Ollama reachable, models available, DB ok |
-| `kew_list_agents` | List available agents with keyword hints |
+| Tool                 | Description                                              |
+| -------------------- | -------------------------------------------------------- |
+| `kew_run`            | Execute a prompt through any model, returns result       |
+| `kew_context_get`    | Read a shared context entry by key                       |
+| `kew_context_set`    | Write a shared context entry                             |
+| `kew_context_search` | Vector similarity search over stored knowledge           |
+| `kew_status`         | Task counts, context entries, embedding stats            |
+| `kew_doctor`         | Health check — Ollama reachable, models available, DB ok |
+| `kew_list_agents`    | List available agents with keyword hints                 |
 
 All tools are blocking. The server uses `rmcp` (official Rust MCP SDK) with stdio transport.
 
@@ -182,16 +182,16 @@ Creates `.kew/` with the SQLite database, scaffolds `kew_config.yaml`, injects M
 
 Built-in agents (YAML configs compiled into the binary):
 
-| Agent | Role |
-|-------|------|
-| `developer` | Production code writer |
-| `debugger` | Systematic root-cause analysis |
-| `docs-writer` | Documentation |
-| `security` | Vulnerability auditor |
-| `doc-audit` | Documentation gap finder |
-| `tester` | Test suite writer |
-| `watcher` | Progress tracker |
-| `error-finder` | Adversarial bug detector |
+| Agent          | Role                           |
+| -------------- | ------------------------------ |
+| `developer`    | Production code writer         |
+| `debugger`     | Systematic root-cause analysis |
+| `docs-writer`  | Documentation                  |
+| `security`     | Vulnerability auditor          |
+| `doc-audit`    | Documentation gap finder       |
+| `tester`       | Test suite writer              |
+| `watcher`      | Progress tracker               |
+| `error-finder` | Adversarial bug detector       |
 
 Override or add agents by dropping YAML files in `.kew/agents/<name>.yaml` (project-local) or `~/.config/kew/agents/<name>.yaml` (user-global).
 
@@ -210,21 +210,21 @@ Locks are TTL-based (default 600s), released on task completion (success or fail
 
 ## Technology
 
-| Component | Crate |
-|-----------|-------|
-| Async runtime | `tokio` |
-| CLI | `clap` (derive) |
-| HTTP | `reqwest` |
-| Database | `rusqlite` (bundled SQLite) |
-| MCP | `rmcp` |
-| TUI | `ratatui` + `crossterm` |
-| Progress | `indicatif` + `console` |
-| IDs | `ulid` |
-| Serialization | `serde` + `serde_json` |
-| MCP schemas | `schemars` |
-| Vectors | `zerocopy` |
-| Errors | `thiserror` + `anyhow` |
-| Logging | `tracing` |
+| Component     | Crate                       |
+| ------------- | --------------------------- |
+| Async runtime | `tokio`                     |
+| CLI           | `clap` (derive)             |
+| HTTP          | `reqwest`                   |
+| Database      | `rusqlite` (bundled SQLite) |
+| MCP           | `rmcp`                      |
+| TUI           | `ratatui` + `crossterm`     |
+| Progress      | `indicatif` + `console`     |
+| IDs           | `ulid`                      |
+| Serialization | `serde` + `serde_json`      |
+| MCP schemas   | `schemars`                  |
+| Vectors       | `zerocopy`                  |
+| Errors        | `thiserror` + `anyhow`      |
+| Logging       | `tracing`                   |
 
 Feature flags:
 
