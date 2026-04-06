@@ -97,6 +97,79 @@ impl ChainArgs {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::Provider;
+
+    fn make_chain_args(steps: Vec<&str>, model: &str, system: Option<&str>) -> ChainArgs {
+        ChainArgs {
+            step: steps.into_iter().map(String::from).collect(),
+            model: model.into(),
+            system: system.map(String::from),
+            timeout: "10m".into(),
+            json: false,
+            quiet: false,
+        }
+    }
+
+    #[test]
+    fn test_parse_timeout_chain() {
+        let args = make_chain_args(vec!["test"], "m", None);
+        assert_eq!(args.parse_timeout(), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn test_parse_steps_plain_prompt() {
+        let args = make_chain_args(vec!["Analyze the code"], "gemma4:26b", None);
+        let steps = args.parse_steps();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].prompt, "Analyze the code");
+        assert_eq!(steps[0].model, "gemma4:26b");
+        assert_eq!(steps[0].provider, Provider::Ollama);
+    }
+
+    #[test]
+    fn test_parse_steps_with_model() {
+        let args = make_chain_args(vec!["Do something:gemma4:26b"], "default", None);
+        let steps = args.parse_steps();
+        assert_eq!(steps.len(), 1);
+        // rfind(':') finds the last colon, so model_candidate = "26b"
+        assert_eq!(steps[0].prompt, "Do something:gemma4");
+    }
+
+    #[test]
+    fn test_parse_steps_with_claude_model() {
+        let args = make_chain_args(vec!["Review code:claude-sonnet-4-20250514"], "default", None);
+        let steps = args.parse_steps();
+        assert_eq!(steps[0].prompt, "Review code");
+        assert_eq!(steps[0].model, "claude-sonnet-4-20250514");
+        assert_eq!(steps[0].provider, Provider::Claude);
+    }
+
+    #[test]
+    fn test_parse_steps_multiple() {
+        let args = make_chain_args(
+            vec!["Step one", "Step two", "Step three"],
+            "gemma4:26b",
+            Some("Be helpful"),
+        );
+        let steps = args.parse_steps();
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].system_prompt.as_deref(), Some("Be helpful"));
+        assert_eq!(steps[2].system_prompt.as_deref(), Some("Be helpful"));
+    }
+
+    #[test]
+    fn test_parse_steps_prompt_with_spaces_after_colon() {
+        // "Write code: make it good" — the part after last ':' has a space, so not a model
+        let args = make_chain_args(vec!["Write code: make it good"], "gemma4:26b", None);
+        let steps = args.parse_steps();
+        assert_eq!(steps[0].prompt, "Write code: make it good");
+        assert_eq!(steps[0].model, "gemma4:26b");
+    }
+}
+
 pub async fn execute(args: &ChainArgs, db_path: &str, ollama_url: &str, claude_key: Option<&str>) -> Result<()> {
     let steps = args.parse_steps();
     if steps.is_empty() {

@@ -99,17 +99,24 @@ impl Worker {
 
         // 4. Acquire file locks
         if !task.files_locked.is_empty() {
-            let conn = self.db.conn();
-            for path in &task.files_locked {
-                if !db::locks::acquire_lock(&conn, path, &task.id, 600).unwrap_or(false) {
-                    let err = format!("could not acquire lock on {path}");
-                    self.fail_task(&task.id, &err);
-                    return WorkResult {
-                        task_id: task.id.clone(),
-                        result: Err(err),
-                        stats: CompletionStats::default(),
-                    };
+            let lock_err = {
+                let conn = self.db.conn();
+                let mut err = None;
+                for path in &task.files_locked {
+                    if !db::locks::acquire_lock(&conn, path, &task.id, 600).unwrap_or(false) {
+                        err = Some(format!("could not acquire lock on {path}"));
+                        break;
+                    }
                 }
+                err
+            }; // conn dropped here
+            if let Some(err) = lock_err {
+                self.fail_task(&task.id, &err);
+                return WorkResult {
+                    task_id: task.id.clone(),
+                    result: Err(err),
+                    stats: CompletionStats::default(),
+                };
             }
         }
 
@@ -461,5 +468,213 @@ mod tests {
         assert!(output.contains("You are a tester."));
         assert!(output.contains("The auth uses JWT."));
         assert!(output.contains("Write tests"));
+    }
+
+    #[tokio::test]
+    async fn test_worker_handles_llm_failure() {
+        struct FailingClient;
+        #[async_trait::async_trait]
+        impl LlmClient for FailingClient {
+            async fn chat(&self, _req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
+                Err(LlmError::ProviderError { status: 500, body: "internal error".into() })
+            }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
+            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
+            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
+            fn provider_name(&self) -> &str { "failing" }
+        }
+
+        let db = Database::open_in_memory().unwrap();
+        let worker = Worker::new("w1".into(), db.clone(), Arc::new(FailingClient), None);
+
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "failing".into(),
+                provider: Provider::Ollama,
+                prompt: "This will fail".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        assert!(result.result.is_err());
+        assert!(result.result.unwrap_err().contains("internal error"));
+
+        // Verify DB records failure
+        let conn = db.conn();
+        let task = db::tasks::get_task(&conn, &result.task_id).unwrap().unwrap();
+        assert_eq!(task.status, TaskStatus::Failed);
+        assert!(task.error.unwrap().contains("internal error"));
+    }
+
+    #[tokio::test]
+    async fn test_worker_acquires_and_releases_file_locks() {
+        let db = Database::open_in_memory().unwrap();
+        let client = mock_client("done");
+        let worker = Worker::new("w1".into(), db.clone(), client, None);
+
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "mock".into(),
+                provider: Provider::Ollama,
+                prompt: "Edit file".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec!["src/main.rs".into()],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        assert!(result.result.is_ok());
+
+        // Locks should be released after execution
+        let conn = db.conn();
+        let locks = db::locks::list_locks(&conn).unwrap();
+        assert!(locks.is_empty(), "locks should be released: {locks:?}");
+    }
+
+    #[tokio::test]
+    async fn test_worker_fails_on_lock_conflict() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Pre-acquire a lock by another task
+        {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "mock".into(),
+                provider: Provider::Ollama,
+                prompt: "blocker".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            let blocker = db::tasks::claim_next_pending(&conn, "w0").unwrap().unwrap();
+            db::locks::acquire_lock(&conn, "src/main.rs", &blocker.id, 600).unwrap();
+        }
+
+        let client = mock_client("done");
+        let worker = Worker::new("w1".into(), db.clone(), client, None);
+
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "mock".into(),
+                provider: Provider::Ollama,
+                prompt: "Try edit locked file".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec!["src/main.rs".into()],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        assert!(result.result.is_err());
+        assert!(result.result.unwrap_err().contains("could not acquire lock"));
+    }
+
+    #[tokio::test]
+    async fn test_worker_claude_provider_routing() {
+        struct ClaudeMock;
+        #[async_trait::async_trait]
+        impl LlmClient for ClaudeMock {
+            async fn chat(&self, _req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
+                Ok((
+                    ChatResponse {
+                        message: ChatMessage { role: "assistant".into(), content: "from claude".into() },
+                        model: "claude-sonnet".into(), done: true,
+                        total_duration_ns: None, prompt_eval_count: None, eval_count: None,
+                    },
+                    CompletionStats::default(),
+                ))
+            }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
+            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
+            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
+            fn provider_name(&self) -> &str { "claude" }
+        }
+
+        let db = Database::open_in_memory().unwrap();
+        let ollama = mock_client("from ollama");
+        let claude: Arc<dyn LlmClient> = Arc::new(ClaudeMock);
+        let worker = Worker::new("w1".into(), db.clone(), ollama, Some(claude));
+
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "claude-sonnet-4-20250514".into(),
+                provider: Provider::Claude,
+                prompt: "Test claude routing".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        assert!(result.result.is_ok());
+        assert_eq!(result.result.unwrap(), "from claude");
+    }
+
+    #[tokio::test]
+    async fn test_worker_claude_not_configured() {
+        let db = Database::open_in_memory().unwrap();
+        let ollama = mock_client("from ollama");
+        // No claude client
+        let worker = Worker::new("w1".into(), db.clone(), ollama, None);
+
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "claude-sonnet-4-20250514".into(),
+                provider: Provider::Claude,
+                prompt: "Test missing claude".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        assert!(result.result.is_err());
+        assert!(result.result.unwrap_err().contains("not configured"));
     }
 }

@@ -220,3 +220,118 @@ impl LlmClient for ClaudeClient {
         "claude"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_messages_request_serialization() {
+        let req = MessagesRequest {
+            model: "claude-sonnet-4-20250514".into(),
+            max_tokens: 4096,
+            messages: vec![
+                ApiMessage { role: "user".into(), content: "Hello".into() },
+            ],
+            system: Some("Be helpful".into()),
+            temperature: Some(0.3),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["model"], "claude-sonnet-4-20250514");
+        assert_eq!(json["max_tokens"], 4096);
+        assert_eq!(json["system"], "Be helpful");
+        assert_eq!(json["temperature"], 0.3);
+        assert_eq!(json["messages"][0]["role"], "user");
+    }
+
+    #[test]
+    fn test_messages_request_skips_none_fields() {
+        let req = MessagesRequest {
+            model: "claude-sonnet-4-20250514".into(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: None,
+            temperature: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("system").is_none());
+        assert!(json.get("temperature").is_none());
+    }
+
+    #[test]
+    fn test_messages_response_deserialization() {
+        let json = r#"{
+            "content": [
+                {"type": "text", "text": "Hello!"},
+                {"type": "text", "text": " How are you?"}
+            ],
+            "model": "claude-sonnet-4-20250514",
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }"#;
+        let resp: MessagesResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.model, "claude-sonnet-4-20250514");
+        assert_eq!(resp.usage.input_tokens, 10);
+        assert_eq!(resp.usage.output_tokens, 5);
+        assert_eq!(resp.content.len(), 2);
+
+        // Verify text extraction logic
+        let text: String = resp.content.iter().filter_map(|b| b.text.as_deref()).collect();
+        assert_eq!(text, "Hello! How are you?");
+    }
+
+    #[test]
+    fn test_api_error_deserialization() {
+        let json = r#"{"error": {"message": "Invalid API key"}}"#;
+        let err: ApiError = serde_json::from_str(json).unwrap();
+        assert_eq!(err.error.message, "Invalid API key");
+    }
+
+    #[test]
+    fn test_system_prompt_extraction() {
+        // Simulate what chat() does: extract system from messages
+        let messages = vec![
+            ChatMessage { role: "system".into(), content: "Be helpful".into() },
+            ChatMessage { role: "user".into(), content: "Hello".into() },
+            ChatMessage { role: "user".into(), content: "Another msg".into() },
+        ];
+
+        let mut system_prompt = None;
+        let mut api_messages = Vec::new();
+        for msg in &messages {
+            if msg.role == "system" {
+                system_prompt = Some(msg.content.clone());
+            } else {
+                api_messages.push(ApiMessage {
+                    role: msg.role.clone(),
+                    content: msg.content.clone(),
+                });
+            }
+        }
+
+        assert_eq!(system_prompt, Some("Be helpful".into()));
+        assert_eq!(api_messages.len(), 2);
+        assert_eq!(api_messages[0].content, "Hello");
+    }
+
+    #[test]
+    fn test_provider_name() {
+        let client = ClaudeClient::new("test-key");
+        assert_eq!(client.provider_name(), "claude");
+    }
+
+    #[tokio::test]
+    async fn test_embed_returns_error() {
+        let client = ClaudeClient::new("test-key");
+        let result = client.embed("nomic-embed-text", &["test".into()]).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not support embeddings"));
+    }
+
+    #[tokio::test]
+    async fn test_list_models() {
+        let client = ClaudeClient::new("test-key");
+        let models = client.list_models().await.unwrap();
+        assert!(models.len() >= 3);
+        assert!(models.iter().any(|m| m.contains("sonnet")));
+    }
+}

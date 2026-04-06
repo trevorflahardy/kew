@@ -347,6 +347,223 @@ impl ServerHandler for KewMcpServer {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{ChatMessage, ChatRequest, ChatResponse, CompletionStats, LlmError};
+    use rmcp::ServerHandler;
+
+    /// Mock LLM that returns a fixed string.
+    struct MockLlm {
+        response: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for MockLlm {
+        async fn chat(&self, _req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
+            Ok((
+                ChatResponse {
+                    message: ChatMessage { role: "assistant".into(), content: self.response.clone() },
+                    model: "mock".into(),
+                    done: true,
+                    total_duration_ns: Some(100_000_000),
+                    prompt_eval_count: Some(10),
+                    eval_count: Some(20),
+                },
+                CompletionStats { prompt_tokens: Some(10), completion_tokens: Some(20), duration_ms: Some(100) },
+            ))
+        }
+        async fn embed(&self, _: &str, input: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
+            Ok(input.iter().map(|_| vec![1.0, 0.0, 0.0]).collect())
+        }
+        async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec!["mock-model".into()])
+        }
+        async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
+        fn provider_name(&self) -> &str { "mock" }
+    }
+
+    fn make_server_with_mock(db: Database, response: &str) -> KewMcpServer {
+        let ollama: Arc<dyn LlmClient> = Arc::new(MockLlm { response: response.into() });
+        let tool_router = KewMcpServer::tool_router();
+        KewMcpServer {
+            db,
+            ollama,
+            ollama_url: "http://mock:11434".into(),
+            tool_router,
+        }
+    }
+
+    #[test]
+    fn test_server_get_info() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+        let info = server.get_info();
+        assert!(info.instructions.unwrap().contains("kew_run"));
+    }
+
+    #[test]
+    fn test_tool_router_lists_all_tools() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+        let tools = server.tool_router.list_all();
+
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert!(names.contains(&"kew_run"), "missing kew_run: {names:?}");
+        assert!(names.contains(&"kew_context_get"), "missing kew_context_get");
+        assert!(names.contains(&"kew_context_set"), "missing kew_context_set");
+        assert!(names.contains(&"kew_context_search"), "missing kew_context_search");
+        assert!(names.contains(&"kew_status"), "missing kew_status");
+        assert!(names.contains(&"kew_doctor"), "missing kew_doctor");
+        assert_eq!(tools.len(), 6);
+    }
+
+    #[test]
+    fn test_tool_schemas_have_descriptions() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+        let tools = server.tool_router.list_all();
+
+        for tool in &tools {
+            assert!(
+                tool.description.is_some(),
+                "tool {} has no description",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_kew_run_input_schema_requires_prompt() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+        let tools = server.tool_router.list_all();
+
+        let run_tool = tools.iter().find(|t| t.name == "kew_run").unwrap();
+        let schema = serde_json::to_string(&run_tool.input_schema).unwrap();
+        assert!(schema.contains("prompt"), "kew_run schema should require 'prompt': {schema}");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_context_set_and_get() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+
+        // Set context
+        let set_params = ContextSetParams {
+            key: "test-key".into(),
+            content: "test content".into(),
+            namespace: "default".into(),
+        };
+        let Json(set_result) = server.context_set(Parameters(set_params));
+        assert_eq!(set_result.key, "test-key");
+        assert_eq!(set_result.bytes, 12);
+
+        // Get context
+        let get_params = ContextGetParams { key: "test-key".into() };
+        let Json(get_result) = server.context_get(Parameters(get_params));
+        assert_eq!(get_result.content, "test content");
+        assert_eq!(get_result.namespace, "default");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_context_get_not_found() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+
+        let params = ContextGetParams { key: "nonexistent".into() };
+        let Json(result) = server.context_get(Parameters(params));
+        assert_eq!(result.namespace, "not_found");
+        assert!(result.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_status() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+
+        let Json(result) = server.status(Parameters(StatusParams {}));
+        assert_eq!(result.tasks_pending, 0);
+        assert_eq!(result.tasks_done, 0);
+        assert_eq!(result.context_entries, 0);
+        assert_eq!(result.embeddings, 0);
+        assert!(result.ollama_ok);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_doctor() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+
+        let Json(result) = server.doctor(Parameters(DoctorParams {})).await;
+        assert!(result.ollama_reachable);
+        assert_eq!(result.models, vec!["mock-model"]);
+        assert!(result.db_ok);
+        assert_eq!(result.ollama_url, "http://mock:11434");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_run_executes_task() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "42");
+
+        let params = RunParams {
+            prompt: "What is 6*7?".into(),
+            model: "mock".into(),
+            system: None,
+            context: vec![],
+            share_as: None,
+        };
+        let Json(result) = server.run(Parameters(params)).await;
+        assert_eq!(result.status, "done");
+        assert_eq!(result.result.as_deref(), Some("42"));
+        assert!(result.error.is_none());
+        assert!(!result.task_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_run_with_share_as_stores_context() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "shared result");
+
+        let params = RunParams {
+            prompt: "Generate".into(),
+            model: "mock".into(),
+            system: None,
+            context: vec![],
+            share_as: Some("output-key".into()),
+        };
+        let Json(run_result) = server.run(Parameters(params)).await;
+        assert_eq!(run_result.status, "done");
+
+        // Verify context was shared
+        let get_params = ContextGetParams { key: "output-key".into() };
+        let Json(ctx) = server.context_get(Parameters(get_params));
+        assert_eq!(ctx.content, "shared result");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_context_search_with_embeddings() {
+        let db = Database::open_in_memory().unwrap();
+        let server = make_server_with_mock(db, "hi");
+
+        // Store an embedding manually
+        {
+            let conn = server.db.conn();
+            db::vectors::store_embedding(&conn, "k1", "result", Some("t1"), &[1.0, 0.0, 0.0], "mock").unwrap();
+        }
+
+        let params = ContextSearchParams {
+            query: "test".into(),
+            top_k: 5,
+        };
+        let Json(result) = server.context_search(Parameters(params)).await;
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.results[0].key, "k1");
+        assert!(result.results[0].score > 0.99);
+    }
+}
+
 /// Start the MCP server on stdio.
 pub async fn serve(db: Database, ollama_url: &str) -> anyhow::Result<()> {
     let server = KewMcpServer::new(db, ollama_url);

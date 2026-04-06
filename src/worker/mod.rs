@@ -6,4 +6,5 @@
 
 pub mod chain;
 pub mod pool;
+#[allow(clippy::module_inception)]
 pub mod worker;

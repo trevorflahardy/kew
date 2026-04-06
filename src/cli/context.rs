@@ -94,10 +94,10 @@ pub enum ContextCommands {
 pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Result<()> {
     let db = Database::open(std::path::Path::new(db_path))
         .context("failed to open database")?;
-    let conn = db.conn();
 
     match &args.command {
         ContextCommands::List { namespace, limit, json } => {
+            let conn = db.conn();
             let entries = db::context::list_context(&conn, namespace.as_deref(), *limit)
                 .context("failed to list context")?;
 
@@ -135,6 +135,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
         }
 
         ContextCommands::Get { key, json } => {
+            let conn = db.conn();
             let entry = db::context::get_context(&conn, key)
                 .context("failed to get context")?;
 
@@ -172,6 +173,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
                 }
             };
 
+            let conn = db.conn();
             db::context::put_context(&conn, key, namespace, &text, None)
                 .context("failed to set context")?;
             eprintln!("set context '{key}' ({} bytes)", text.len());
@@ -180,7 +182,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
         ContextCommands::Search { query, top_k, embed_model, json } => {
             let client = OllamaClient::new(ollama_url);
             let embeddings = client
-                .embed(embed_model, &[query.clone()])
+                .embed(embed_model, std::slice::from_ref(query))
                 .await
                 .context("failed to generate query embedding")?;
 
@@ -188,6 +190,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
                 anyhow::bail!("embedding model returned empty vector");
             }
 
+            let conn = db.conn();
             let results = db::vectors::search_similar(&conn, &embeddings[0], None, *top_k)
                 .context("failed to search embeddings")?;
 
@@ -215,6 +218,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
         }
 
         ContextCommands::Delete { key } => {
+            let conn = db.conn();
             let deleted = db::context::delete_context(&conn, key)
                 .context("failed to delete context")?;
             if deleted {
@@ -232,6 +236,7 @@ pub async fn execute(args: &ContextArgs, db_path: &str, ollama_url: &str) -> Res
                 anyhow::bail!("aborted (use --force)");
             }
 
+            let conn = db.conn();
             let count = db::context::clear_context(&conn, namespace.as_deref())
                 .context("failed to clear context")?;
             eprintln!("cleared {count} context entries");
