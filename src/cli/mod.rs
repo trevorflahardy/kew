@@ -4,6 +4,7 @@ pub mod agent;
 pub mod chain;
 pub mod context;
 pub mod doctor;
+pub mod index;
 pub mod init;
 pub mod mcp;
 pub mod run;
@@ -65,4 +66,7 @@ pub enum Commands {
 
     /// List, inspect, and manage agent configurations
     Agent(agent::AgentArgs),
+
+    /// Embed project files into the vector database for semantic search
+    Index(index::IndexArgs),
 }

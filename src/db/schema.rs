@@ -79,9 +79,37 @@ pub const MIGRATION_003_AGENT: &str = r#"
 ALTER TABLE tasks ADD COLUMN agent TEXT;
 "#;
 
+/// Migration 004: Add files_to_read column to tasks for auto file injection.
+pub const MIGRATION_004_FILES: &str = r#"
+ALTER TABLE tasks ADD COLUMN files_to_read TEXT;
+"#;
+
+/// Migration 005: Add 'file' source type to embeddings for project indexing.
+///
+/// SQLite cannot ALTER a CHECK constraint, so we recreate the table.
+pub const MIGRATION_005_FILE_EMBEDDINGS: &str = r#"
+PRAGMA foreign_keys = OFF;
+CREATE TABLE IF NOT EXISTS embeddings_v2 (
+    key TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL CHECK(source_type IN ('context','result','file')),
+    source_id TEXT,
+    embedding BLOB NOT NULL,
+    dimensions INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch('now'))
+);
+INSERT OR IGNORE INTO embeddings_v2 SELECT * FROM embeddings;
+DROP TABLE embeddings;
+ALTER TABLE embeddings_v2 RENAME TO embeddings;
+CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type);
+PRAGMA foreign_keys = ON;
+"#;
+
 /// All migrations in order.
 pub const MIGRATIONS: &[(&str, i64)] = &[
     (MIGRATION_001_CORE, 1),
     (MIGRATION_002_VECTORS, 2),
     (MIGRATION_003_AGENT, 3),
+    (MIGRATION_004_FILES, 4),
+    (MIGRATION_005_FILE_EMBEDDINGS, 5),
 ];

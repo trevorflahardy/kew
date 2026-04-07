@@ -101,6 +101,8 @@ pub struct Task {
     pub context_keys: Vec<String>,
     pub share_as: Option<String>,
     pub files_locked: Vec<String>,
+    /// File paths (relative to project root) to auto-read and inject as context.
+    pub files_to_read: Vec<String>,
     pub worker_id: Option<String>,
     pub created_at: i64,
     pub started_at: Option<i64>,
@@ -121,6 +123,8 @@ pub struct NewTask {
     pub context_keys: Vec<String>,
     pub share_as: Option<String>,
     pub files_locked: Vec<String>,
+    /// File paths to auto-read and inject as context before the prompt.
+    pub files_to_read: Vec<String>,
     pub parent_id: Option<String>,
     pub chain_id: Option<String>,
     pub chain_index: Option<i32>,

@@ -61,11 +61,16 @@ schemars = { version = "0.8", optional = true }
 # Vector search
 zerocopy = { version = "0.8", optional = true }
 
+# File indexing
+notify = { version = "6", optional = true }
+ignore = { version = "0.4", optional = true }
+
 [features]
-default = ["tui", "mcp", "vectors"]
+default = ["tui", "mcp", "vectors", "index"]
 tui = ["dep:ratatui", "dep:crossterm"]
 mcp = ["dep:rmcp", "dep:schemars"]
 vectors = ["dep:zerocopy"]
+index = ["dep:notify", "dep:ignore"]
 
 [dev-dependencies]
 tokio-test = "0.4"

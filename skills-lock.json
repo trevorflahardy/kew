@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "code-documentation": {
+      "source": "bytedance/deer-flow",
+      "sourceType": "github",
+      "computedHash": "ec9a1d364fa9e90e425c7c3e8cff85a0cb21ca1b7321b6e4964ece5b693227b1"
+    }
+  }
+}

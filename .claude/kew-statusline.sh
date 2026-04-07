@@ -33,26 +33,33 @@ embeddings=$(_get embeddings)
 db_size=$(_get db)
 agents=$(_get agents)
 
+BOLD='\033[1m'
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+CYAN='\033[36m'
+DIM='\033[2m'
+RESET='\033[0m'
+
 parts=""
 if [ "${running:-0}" -gt 0 ]; then
-  parts="${parts}▶${running} "
+  parts="${parts}${CYAN}${BOLD}▶${running}${RESET} "
 fi
 if [ "${pending:-0}" -gt 0 ]; then
-  parts="${parts}⏳${pending} "
+  parts="${parts}${YELLOW}⏳${pending}${RESET} "
 fi
 if [ "${done_count:-0}" -gt 0 ]; then
-  parts="${parts}✓${done_count} "
+  parts="${parts}${GREEN}✓${done_count}${RESET} "
 fi
 if [ "${failed:-0}" -gt 0 ]; then
-  parts="${parts}✗${failed} "
+  parts="${parts}${RED}${BOLD}✗${failed}${RESET} "
 fi
 if [ -z "$parts" ]; then
-  parts="idle "
+  parts="${DIM}idle${RESET} "
 fi
-parts="${parts}  ctx:${context:-0} emb:${embeddings:-0}"
-parts="${parts}  db:${db_size:-?}"
+parts="${parts} ${DIM}ctx:${context:-0} emb:${embeddings:-0} db:${db_size:-?}${RESET}"
 if [ -n "$agents" ]; then
-  parts="${parts}  [${agents}]"
+  parts="${parts} ${CYAN}[${agents}]${RESET}"
 fi
 
-printf "◆ kew  %s" "$parts"
+printf "◆ kew  ${parts}"

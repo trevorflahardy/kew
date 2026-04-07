@@ -54,6 +54,9 @@ async fn main() {
         Commands::Status(ref args) => cli::status::execute(args, &db_path),
         Commands::Doctor(_) => cli::doctor::execute(&cli.ollama_url, &db_path).await,
         Commands::Agent(ref args) => cli::agent::execute(args),
+        Commands::Index(ref args) => {
+            cli::index::execute(args, &db_path, &cli.ollama_url).await
+        }
     };
 
     if let Err(e) = result {

@@ -63,6 +63,7 @@ pub async fn execute_chain(
                 context_keys,
                 share_as: Some(format!("{chain_id}-step-{i}")),
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: Some(chain_id.to_string()),
                 chain_index: Some(i as i32),

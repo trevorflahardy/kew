@@ -102,6 +102,44 @@ impl Worker {
             });
         }
 
+        // Inject requested files as user messages (max 100 KB each)
+        const FILE_SIZE_LIMIT: usize = 102_400;
+        let project_root = std::env::current_dir().unwrap_or_default();
+        for rel_path in &task.files_to_read {
+            // Resolve and guard against path traversal
+            let candidate = project_root.join(rel_path);
+            let Ok(abs) = candidate.canonicalize() else {
+                warn!("files_to_read: cannot resolve '{rel_path}', skipping");
+                continue;
+            };
+            if !abs.starts_with(&project_root) {
+                warn!("files_to_read: '{rel_path}' escapes project root, skipping");
+                continue;
+            }
+            match std::fs::read_to_string(&abs) {
+                Ok(content) => {
+                    let truncated = if content.len() > FILE_SIZE_LIMIT {
+                        warn!("files_to_read: '{rel_path}' truncated to {FILE_SIZE_LIMIT} bytes");
+                        // Walk back to a valid UTF-8 char boundary to avoid a panic
+                        let mut boundary = FILE_SIZE_LIMIT;
+                        while boundary > 0 && !content.is_char_boundary(boundary) {
+                            boundary -= 1;
+                        }
+                        &content[..boundary]
+                    } else {
+                        &content
+                    };
+                    messages.push(ChatMessage {
+                        role: "user".into(),
+                        content: format!("[File: {rel_path}]\n```\n{truncated}\n```"),
+                    });
+                }
+                Err(e) => {
+                    warn!("files_to_read: failed to read '{rel_path}': {e}");
+                }
+            }
+        }
+
         // The actual user prompt
         messages.push(ChatMessage {
             role: "user".into(),
@@ -367,6 +405,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -403,6 +442,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: Some("auth-analysis".into()),
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -490,6 +530,7 @@ mod tests {
                 context_keys: vec!["prior-work".into()],
                 share_as: None,
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -548,6 +589,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -585,6 +627,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec!["src/main.rs".into()],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -617,6 +660,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -639,6 +683,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec!["src/main.rs".into()],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -708,6 +753,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -738,6 +784,7 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
+                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -749,5 +796,129 @@ mod tests {
         let result = worker.execute(&task).await;
         assert!(result.result.is_err());
         assert!(result.result.unwrap_err().contains("not configured"));
+    }
+
+    // --- files_to_read injection tests ---
+
+    #[tokio::test]
+    async fn test_worker_injects_file_content() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Use Cargo.toml — guaranteed to exist in the project root (cwd during tests)
+        // and contains known content ("[package]") we can assert on.
+
+        // Use an echo client that returns what it receives
+        struct EchoClient;
+        #[async_trait::async_trait]
+        impl LlmClient for EchoClient {
+            async fn chat(&self, req: crate::llm::ChatRequest) -> Result<(crate::llm::ChatResponse, CompletionStats), crate::llm::LlmError> {
+                let combined = req.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n---\n");
+                Ok((crate::llm::ChatResponse { message: ChatMessage { role: "assistant".into(), content: combined }, model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
+            }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, crate::llm::LlmError> { Ok(vec![]) }
+            async fn list_models(&self) -> Result<Vec<String>, crate::llm::LlmError> { Ok(vec![]) }
+            async fn ping(&self) -> Result<(), crate::llm::LlmError> { Ok(()) }
+            fn provider_name(&self) -> &str { "echo" }
+        }
+
+        let worker = Worker::new("w1".into(), db.clone(), Arc::new(EchoClient), None);
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "echo".into(),
+                provider: Provider::Ollama,
+                prompt: "review it".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                files_to_read: vec!["Cargo.toml".into()],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        // The echo client returns all messages concatenated — file content should be present
+        let output = result.result.unwrap();
+        assert!(output.contains("[package]"), "Cargo.toml content missing from injected context: {output}");
+    }
+
+    #[tokio::test]
+    async fn test_worker_skips_missing_file_gracefully() {
+        let db = Database::open_in_memory().unwrap();
+        let client = mock_client("done");
+        let worker = Worker::new("w1".into(), db.clone(), client, None);
+
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "mock".into(),
+                provider: Provider::Ollama,
+                prompt: "do work".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                files_to_read: vec!["/nonexistent/path/file.rs".into()],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        // Task must succeed even though the file doesn't exist
+        let result = worker.execute(&task).await;
+        assert!(result.result.is_ok(), "task failed on missing file: {:?}", result.result);
+    }
+
+    #[tokio::test]
+    async fn test_worker_rejects_path_traversal_in_files_to_read() {
+        let db = Database::open_in_memory().unwrap();
+
+        struct EchoClient;
+        #[async_trait::async_trait]
+        impl LlmClient for EchoClient {
+            async fn chat(&self, req: crate::llm::ChatRequest) -> Result<(crate::llm::ChatResponse, CompletionStats), crate::llm::LlmError> {
+                let combined = req.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n---\n");
+                Ok((crate::llm::ChatResponse { message: ChatMessage { role: "assistant".into(), content: combined }, model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
+            }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, crate::llm::LlmError> { Ok(vec![]) }
+            async fn list_models(&self) -> Result<Vec<String>, crate::llm::LlmError> { Ok(vec![]) }
+            async fn ping(&self) -> Result<(), crate::llm::LlmError> { Ok(()) }
+            fn provider_name(&self) -> &str { "echo" }
+        }
+
+        let worker = Worker::new("w1".into(), db.clone(), Arc::new(EchoClient), None);
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "echo".into(),
+                provider: Provider::Ollama,
+                prompt: "review".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                // Attempt to read outside project root via traversal
+                files_to_read: vec!["../../etc/passwd".into()],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        // Task should succeed (traversal is skipped, not fatal) but output must NOT contain passwd content
+        assert!(result.result.is_ok());
+        let output = result.result.unwrap();
+        assert!(!output.contains("root:"), "path traversal succeeded — passwd content in output");
     }
 }
