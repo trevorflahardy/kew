@@ -39,6 +39,9 @@ dirs = "5"
 thiserror = "2"
 anyhow = "1"
 
+# Regex (for agent grep tool)
+regex = "1"
+
 # Secret handling (zeroize API keys on drop)
 secrecy = { version = "0.10", features = ["serde"] }
 

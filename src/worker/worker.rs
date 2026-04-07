@@ -2,6 +2,21 @@
 //!
 //! A Worker takes a Task, loads context, builds the message array,
 //! calls the LLM, stores the result, and optionally shares it as context.
+//!
+//! ## Agentic tool loop
+//!
+//! When tool definitions are available, the worker runs a multi-turn loop:
+//!
+//! 1. Build initial messages (system prompt, context, files, user prompt)
+//! 2. Send to LLM with tool definitions
+//! 3. If the response contains `tool_calls`:
+//!    a. Execute each tool call via the `ToolSandbox`
+//!    b. Append the assistant message and tool results to the conversation
+//!    c. Send the updated conversation back to the LLM (goto 2)
+//! 4. If the response is a plain text reply, we're done — store the result.
+//!
+//! The loop is capped at `MAX_TOOL_ITERATIONS` (25) to prevent runaway agents.
+//! Stats are accumulated across all iterations.
 
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
@@ -9,6 +24,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::db::models::{Provider, Task};
 use crate::db::{self, Database};
 use crate::llm::{ChatMessage, ChatRequest, CompletionStats, LlmClient, LlmError};
+use crate::worker::tools::{ToolSandbox, MAX_TOOL_ITERATIONS};
 
 /// Result of a single task execution.
 #[derive(Debug, Clone)]
@@ -63,6 +79,11 @@ impl Worker {
     /// - On success, best-effort embeds the result via Ollama for future vector search
     ///   (failures here are logged and ignored).
     ///
+    /// **Agentic tool loop:** When running against a model that supports tool calling,
+    /// the worker provides `read_file`, `list_dir`, `grep`, and `write_file` tools.
+    /// The model can call these mid-generation to explore the codebase. The loop runs
+    /// until the model produces a final text response or hits the iteration cap.
+    ///
     /// **Hardcoded LLM parameters:** `temperature = 0.3`, `max_tokens = 4096`. These
     /// are not task-configurable — all tasks use the same values regardless of model.
     #[instrument(skip(self, task), fields(task_id = %task.id, model = %task.model))]
@@ -88,18 +109,15 @@ impl Worker {
 
         // System prompt first
         if let Some(ref sys) = task.system_prompt {
-            messages.push(ChatMessage {
-                role: "system".into(),
-                content: sys.clone(),
-            });
+            messages.push(ChatMessage::text("system", sys.clone()));
         }
 
         // Inject context as user messages
         for entry in &context_entries {
-            messages.push(ChatMessage {
-                role: "user".into(),
-                content: format!("[Shared context: {}]\n{}", entry.key, entry.content),
-            });
+            messages.push(ChatMessage::text(
+                "user",
+                format!("[Shared context: {}]\n{}", entry.key, entry.content),
+            ));
         }
 
         // Inject requested files as user messages (max 100 KB each)
@@ -129,10 +147,10 @@ impl Worker {
                     } else {
                         &content
                     };
-                    messages.push(ChatMessage {
-                        role: "user".into(),
-                        content: format!("[File: {rel_path}]\n```\n{truncated}\n```"),
-                    });
+                    messages.push(ChatMessage::text(
+                        "user",
+                        format!("[File: {rel_path}]\n```\n{truncated}\n```"),
+                    ));
                 }
                 Err(e) => {
                     warn!("files_to_read: failed to read '{rel_path}': {e}");
@@ -141,10 +159,7 @@ impl Worker {
         }
 
         // The actual user prompt
-        messages.push(ChatMessage {
-            role: "user".into(),
-            content: task.prompt.clone(),
-        });
+        messages.push(ChatMessage::text("user", task.prompt.clone()));
 
         // 4. Acquire file locks
         if !task.files_locked.is_empty() {
@@ -176,7 +191,15 @@ impl Worker {
             }
         }
 
-        // 5. CALL THE LLM
+        // 5. Set up tool sandbox and definitions for the agentic loop
+        let tool_sandbox = ToolSandbox::new(
+            project_root,
+            task.id.clone(),
+            self.db.clone(),
+        );
+        let tool_defs = ToolSandbox::definitions();
+
+        // 6. AGENTIC TOOL LOOP — call LLM, execute tools, repeat
         debug!("calling LLM: {} via {:?}", task.model, task.provider);
         let client = match self.client_for(&task.provider) {
             Ok(c) => c,
@@ -192,90 +215,156 @@ impl Worker {
             }
         };
 
-        let chat_req = ChatRequest {
-            model: task.model.clone(),
-            messages,
-            stream: false,
-            temperature: Some(0.3),
-            max_tokens: Some(4096),
-        };
+        let mut cumulative_stats = CompletionStats::default();
+        let mut final_text: Option<String> = None;
+        let mut loop_error: Option<String> = None;
 
-        let llm_result = client.chat(chat_req).await;
+        for iteration in 0..MAX_TOOL_ITERATIONS {
+            debug!(iteration, "agentic loop iteration");
 
-        // 6. Handle result
-        let work_result = match llm_result {
-            Ok((response, stats)) => {
-                let result_text = response.message.content.clone();
+            let chat_req = ChatRequest {
+                model: task.model.clone(),
+                messages: messages.clone(),
+                stream: false,
+                temperature: Some(0.3),
+                max_tokens: Some(4096),
+                tools: Some(tool_defs.clone()),
+            };
 
-                // Re-check task status — it may have been cancelled during the LLM await.
-                // If it's no longer 'running', skip mark_done and context storage to avoid
-                // polluting shared context with results from a cancelled task.
-                let still_running = {
-                    let conn = self.db.conn();
-                    db::tasks::get_task(&conn, &task.id)
-                        .ok()
-                        .flatten()
-                        .map(|t| t.status == crate::db::models::TaskStatus::Running)
-                        .unwrap_or(false)
+            match client.chat(chat_req).await {
+                Ok((response, stats)) => {
+                    accumulate_stats(&mut cumulative_stats, &stats);
+
+                    if response.message.has_tool_calls() {
+                        // Model wants to call tools — execute them and continue
+                        let tool_calls = response.message.tool_calls.as_ref().unwrap();
+                        debug!(
+                            count = tool_calls.len(),
+                            iteration, "executing tool calls"
+                        );
+
+                        // Append the assistant's tool-call message to the conversation
+                        messages.push(response.message.clone());
+
+                        // Execute each tool and append results
+                        for tc in tool_calls {
+                            let result = tool_sandbox.execute(tc);
+                            debug!(
+                                tool = %tc.function.name,
+                                result_len = result.len(),
+                                "tool executed"
+                            );
+                            messages.push(ChatMessage::tool_result(
+                                &tc.function.name,
+                                result,
+                            ));
+                        }
+                        // Continue loop — send updated conversation back to LLM
+                    } else {
+                        // Final text response — we're done
+                        final_text = Some(response.message.content);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    loop_error = Some(e.to_string());
+                    break;
+                }
+            }
+
+            // Safety: if we've hit the last iteration, force the final response
+            if iteration == MAX_TOOL_ITERATIONS - 1 {
+                warn!("agentic loop hit iteration cap ({MAX_TOOL_ITERATIONS}), forcing final response");
+                // Send one more request without tools to force a text response
+                let final_req = ChatRequest {
+                    model: task.model.clone(),
+                    messages: messages.clone(),
+                    stream: false,
+                    temperature: Some(0.3),
+                    max_tokens: Some(4096),
+                    tools: None, // No tools — force text output
                 };
-
-                if still_running {
-                    // Store result in DB
-                    {
-                        let conn = self.db.conn();
-                        if let Err(e) = db::tasks::mark_done(
-                            &conn,
-                            &task.id,
-                            &result_text,
-                            stats.prompt_tokens,
-                            stats.completion_tokens,
-                            stats.duration_ms,
-                        ) {
-                            error!("failed to mark task done: {e}");
-                        }
+                match client.chat(final_req).await {
+                    Ok((response, stats)) => {
+                        accumulate_stats(&mut cumulative_stats, &stats);
+                        final_text = Some(response.message.content);
                     }
-
-                    // Share result as context if requested
-                    if let Some(ref share_key) = task.share_as {
-                        let conn = self.db.conn();
-                        if let Err(e) = db::context::put_context(
-                            &conn,
-                            share_key,
-                            "default",
-                            &result_text,
-                            Some(&task.id),
-                        ) {
-                            error!("failed to share context as '{share_key}': {e}");
-                        }
+                    Err(e) => {
+                        loop_error = Some(e.to_string());
                     }
-                } else {
-                    debug!(task_id = %task.id, "task was cancelled during LLM call; skipping mark_done and context storage");
-                }
-
-                // Auto-embed result for future vector search (best-effort)
-                self.try_embed_result(&task.id, &task.prompt, &result_text)
-                    .await;
-
-                info!(duration_ms = stats.duration_ms, "task completed");
-                WorkResult {
-                    task_id: task.id.clone(),
-                    result: Ok(result_text),
-                    stats,
                 }
             }
-            Err(e) => {
-                let err = e.to_string();
-                self.fail_task(&task.id, &err);
-                error!("LLM call failed: {err}");
-                WorkResult {
-                    task_id: task.id.clone(),
-                    result: Err(err),
-                    stats: CompletionStats::default(),
+        }
+
+        // 7. Handle result
+        let work_result = if let Some(result_text) = final_text {
+            // Re-check task status — it may have been cancelled during the LLM await.
+            // If it's no longer 'running', skip mark_done and context storage to avoid
+            // polluting shared context with results from a cancelled task.
+            let still_running = {
+                let conn = self.db.conn();
+                db::tasks::get_task(&conn, &task.id)
+                    .ok()
+                    .flatten()
+                    .map(|t| t.status == crate::db::models::TaskStatus::Running)
+                    .unwrap_or(false)
+            };
+
+            if still_running {
+                // Store result in DB
+                {
+                    let conn = self.db.conn();
+                    if let Err(e) = db::tasks::mark_done(
+                        &conn,
+                        &task.id,
+                        &result_text,
+                        cumulative_stats.prompt_tokens,
+                        cumulative_stats.completion_tokens,
+                        cumulative_stats.duration_ms,
+                    ) {
+                        error!("failed to mark task done: {e}");
+                    }
                 }
+
+                // Share result as context if requested
+                if let Some(ref share_key) = task.share_as {
+                    let conn = self.db.conn();
+                    if let Err(e) = db::context::put_context(
+                        &conn,
+                        share_key,
+                        "default",
+                        &result_text,
+                        Some(&task.id),
+                    ) {
+                        error!("failed to share context as '{share_key}': {e}");
+                    }
+                }
+            } else {
+                debug!(task_id = %task.id, "task was cancelled during LLM call; skipping mark_done and context storage");
+            }
+
+            // Auto-embed result for future vector search (best-effort)
+            self.try_embed_result(&task.id, &task.prompt, &result_text)
+                .await;
+
+            info!(duration_ms = cumulative_stats.duration_ms, "task completed");
+            WorkResult {
+                task_id: task.id.clone(),
+                result: Ok(result_text),
+                stats: cumulative_stats,
+            }
+        } else {
+            let err = loop_error.unwrap_or_else(|| "agentic loop ended without a result".into());
+            self.fail_task(&task.id, &err);
+            error!("LLM call failed: {err}");
+            WorkResult {
+                task_id: task.id.clone(),
+                result: Err(err),
+                stats: cumulative_stats,
             }
         };
 
-        // 7. Release file locks
+        // 8. Release file locks
         self.release_locks(task);
 
         work_result
@@ -324,6 +413,25 @@ impl Worker {
     }
 }
 
+/// Accumulate stats across multiple LLM calls in the agentic loop.
+fn accumulate_stats(cumulative: &mut CompletionStats, new: &CompletionStats) {
+    cumulative.prompt_tokens = match (cumulative.prompt_tokens, new.prompt_tokens) {
+        (Some(a), Some(b)) => Some(a + b),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    };
+    cumulative.completion_tokens = match (cumulative.completion_tokens, new.completion_tokens) {
+        (Some(a), Some(b)) => Some(a + b),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    };
+    cumulative.duration_ms = match (cumulative.duration_ms, new.duration_ms) {
+        (Some(a), Some(b)) => Some(a + b),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,7 +439,7 @@ mod tests {
     use crate::llm::{ChatRequest, ChatResponse, CompletionStats, LlmError};
     use std::time::Duration;
 
-    /// Mock LLM client for testing.
+    /// Mock LLM client for testing — always returns a plain text response (no tool calls).
     struct MockLlmClient {
         response: String,
         latency: Duration,
@@ -346,10 +454,7 @@ mod tests {
             tokio::time::sleep(self.latency).await;
             Ok((
                 ChatResponse {
-                    message: ChatMessage {
-                        role: "assistant".into(),
-                        content: self.response.clone(),
-                    },
+                    message: ChatMessage::text("assistant", self.response.clone()),
                     model: "mock".into(),
                     done: true,
                     total_duration_ns: None,
@@ -482,15 +587,11 @@ mod tests {
                 &self,
                 req: ChatRequest,
             ) -> Result<(ChatResponse, CompletionStats), LlmError> {
-                // Return all messages concatenated so we can verify context was injected
                 let all_content: Vec<String> =
                     req.messages.iter().map(|m| m.content.clone()).collect();
                 Ok((
                     ChatResponse {
-                        message: ChatMessage {
-                            role: "assistant".into(),
-                            content: all_content.join("\n---\n"),
-                        },
+                        message: ChatMessage::text("assistant", all_content.join("\n---\n")),
                         model: "echo".into(),
                         done: true,
                         total_duration_ns: None,
@@ -500,11 +601,7 @@ mod tests {
                     CompletionStats::default(),
                 ))
             }
-            async fn embed(
-                &self,
-                _model: &str,
-                _input: &[String],
-            ) -> Result<Vec<Vec<f32>>, LlmError> {
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
                 Ok(vec![])
             }
             async fn list_models(&self) -> Result<Vec<String>, LlmError> {
@@ -542,7 +639,6 @@ mod tests {
         let result = worker.execute(&task).await;
         let output = result.result.unwrap();
 
-        // Verify: system prompt, context, and user prompt all present
         assert!(output.contains("You are a tester."));
         assert!(output.contains("The auth uses JWT."));
         assert!(output.contains("Write tests"));
@@ -602,7 +698,6 @@ mod tests {
         assert!(result.result.is_err());
         assert!(result.result.unwrap_err().contains("internal error"));
 
-        // Verify DB records failure
         let conn = db.conn();
         let task = db::tasks::get_task(&conn, &result.task_id)
             .unwrap()
@@ -639,7 +734,6 @@ mod tests {
         let result = worker.execute(&task).await;
         assert!(result.result.is_ok());
 
-        // Locks should be released after execution
         let conn = db.conn();
         let locks = db::locks::list_locks(&conn).unwrap();
         assert!(locks.is_empty(), "locks should be released: {locks:?}");
@@ -649,7 +743,6 @@ mod tests {
     async fn test_worker_fails_on_lock_conflict() {
         let db = Database::open_in_memory().unwrap();
 
-        // Pre-acquire a lock by another task
         {
             let conn = db.conn();
             let new = crate::db::models::NewTask {
@@ -711,10 +804,7 @@ mod tests {
             ) -> Result<(ChatResponse, CompletionStats), LlmError> {
                 Ok((
                     ChatResponse {
-                        message: ChatMessage {
-                            role: "assistant".into(),
-                            content: "from claude".into(),
-                        },
+                        message: ChatMessage::text("assistant", "from claude"),
                         model: "claude-sonnet".into(),
                         done: true,
                         total_duration_ns: None,
@@ -771,7 +861,6 @@ mod tests {
     async fn test_worker_claude_not_configured() {
         let db = Database::open_in_memory().unwrap();
         let ollama = mock_client("from ollama");
-        // No claude client
         let worker = Worker::new("w1".into(), db.clone(), ollama, None);
 
         let task = {
@@ -798,26 +887,156 @@ mod tests {
         assert!(result.result.unwrap_err().contains("not configured"));
     }
 
+    // --- Agentic tool loop tests ---
+
+    /// Mock LLM that returns tool calls for N rounds, then a final text answer.
+    struct ToolCallingMock {
+        rounds: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for ToolCallingMock {
+        async fn chat(
+            &self,
+            req: ChatRequest,
+        ) -> Result<(ChatResponse, CompletionStats), LlmError> {
+            let current = self
+                .rounds
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if current > 0 && req.tools.is_some() {
+                // Return a tool call
+                Ok((
+                    ChatResponse {
+                        message: ChatMessage {
+                            role: "assistant".into(),
+                            content: String::new(),
+                            tool_calls: Some(vec![crate::llm::ToolCall {
+                                call_type: "function".into(),
+                                function: crate::llm::ToolCallFunction {
+                                    name: "list_dir".into(),
+                                    arguments: serde_json::json!({}),
+                                },
+                            }]),
+                            tool_name: None,
+                        },
+                        model: "mock".into(),
+                        done: false,
+                        total_duration_ns: None,
+                        prompt_eval_count: Some(5),
+                        eval_count: Some(5),
+                    },
+                    CompletionStats {
+                        prompt_tokens: Some(5),
+                        completion_tokens: Some(5),
+                        duration_ms: Some(50),
+                    },
+                ))
+            } else {
+                // Final text answer
+                Ok((
+                    ChatResponse {
+                        message: ChatMessage::text("assistant", "Final answer after tool use"),
+                        model: "mock".into(),
+                        done: true,
+                        total_duration_ns: None,
+                        prompt_eval_count: Some(10),
+                        eval_count: Some(15),
+                    },
+                    CompletionStats {
+                        prompt_tokens: Some(10),
+                        completion_tokens: Some(15),
+                        duration_ms: Some(100),
+                    },
+                ))
+            }
+        }
+        async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
+            Ok(vec![vec![0.0; 768]])
+        }
+        async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec!["mock".into()])
+        }
+        async fn ping(&self) -> Result<(), LlmError> {
+            Ok(())
+        }
+        fn provider_name(&self) -> &str {
+            "mock-tool-calling"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_agentic_tool_loop() {
+        let db = Database::open_in_memory().unwrap();
+        let client: Arc<dyn LlmClient> = Arc::new(ToolCallingMock {
+            rounds: std::sync::atomic::AtomicUsize::new(2), // 2 tool rounds, then final
+        });
+        let worker = Worker::new("w1".into(), db.clone(), client, None);
+
+        let task = {
+            let conn = db.conn();
+            let new = crate::db::models::NewTask {
+                model: "mock".into(),
+                provider: Provider::Ollama,
+                prompt: "Explore the codebase".into(),
+                system_prompt: None,
+                context_keys: vec![],
+                share_as: None,
+                files_locked: vec![],
+                files_to_read: vec![],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            db::tasks::create_task(&conn, &new).unwrap();
+            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
+        };
+
+        let result = worker.execute(&task).await;
+        assert!(result.result.is_ok());
+        assert_eq!(result.result.unwrap(), "Final answer after tool use");
+
+        // Stats should be accumulated from all iterations (2 tool + 1 final = 3 calls)
+        assert_eq!(result.stats.prompt_tokens, Some(20)); // 5+5+10
+        assert_eq!(result.stats.completion_tokens, Some(25)); // 5+5+15
+        assert_eq!(result.stats.duration_ms, Some(200)); // 50+50+100
+    }
+
+    #[tokio::test]
+    async fn test_accumulate_stats() {
+        let mut cum = CompletionStats::default();
+        let s1 = CompletionStats {
+            prompt_tokens: Some(10),
+            completion_tokens: Some(20),
+            duration_ms: Some(100),
+        };
+        let s2 = CompletionStats {
+            prompt_tokens: Some(5),
+            completion_tokens: None,
+            duration_ms: Some(50),
+        };
+        accumulate_stats(&mut cum, &s1);
+        accumulate_stats(&mut cum, &s2);
+        assert_eq!(cum.prompt_tokens, Some(15));
+        assert_eq!(cum.completion_tokens, Some(20));
+        assert_eq!(cum.duration_ms, Some(150));
+    }
+
     // --- files_to_read injection tests ---
 
     #[tokio::test]
     async fn test_worker_injects_file_content() {
         let db = Database::open_in_memory().unwrap();
 
-        // Use Cargo.toml — guaranteed to exist in the project root (cwd during tests)
-        // and contains known content ("[package]") we can assert on.
-
-        // Use an echo client that returns what it receives
         struct EchoClient;
         #[async_trait::async_trait]
         impl LlmClient for EchoClient {
-            async fn chat(&self, req: crate::llm::ChatRequest) -> Result<(crate::llm::ChatResponse, CompletionStats), crate::llm::LlmError> {
+            async fn chat(&self, req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
                 let combined = req.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n---\n");
-                Ok((crate::llm::ChatResponse { message: ChatMessage { role: "assistant".into(), content: combined }, model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
+                Ok((ChatResponse { message: ChatMessage::text("assistant", combined), model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
             }
-            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, crate::llm::LlmError> { Ok(vec![]) }
-            async fn list_models(&self) -> Result<Vec<String>, crate::llm::LlmError> { Ok(vec![]) }
-            async fn ping(&self) -> Result<(), crate::llm::LlmError> { Ok(()) }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
+            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
+            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
             fn provider_name(&self) -> &str { "echo" }
         }
 
@@ -842,7 +1061,6 @@ mod tests {
         };
 
         let result = worker.execute(&task).await;
-        // The echo client returns all messages concatenated — file content should be present
         let output = result.result.unwrap();
         assert!(output.contains("[package]"), "Cargo.toml content missing from injected context: {output}");
     }
@@ -872,7 +1090,6 @@ mod tests {
             db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
         };
 
-        // Task must succeed even though the file doesn't exist
         let result = worker.execute(&task).await;
         assert!(result.result.is_ok(), "task failed on missing file: {:?}", result.result);
     }
@@ -884,13 +1101,13 @@ mod tests {
         struct EchoClient;
         #[async_trait::async_trait]
         impl LlmClient for EchoClient {
-            async fn chat(&self, req: crate::llm::ChatRequest) -> Result<(crate::llm::ChatResponse, CompletionStats), crate::llm::LlmError> {
+            async fn chat(&self, req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
                 let combined = req.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n---\n");
-                Ok((crate::llm::ChatResponse { message: ChatMessage { role: "assistant".into(), content: combined }, model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
+                Ok((ChatResponse { message: ChatMessage::text("assistant", combined), model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
             }
-            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, crate::llm::LlmError> { Ok(vec![]) }
-            async fn list_models(&self) -> Result<Vec<String>, crate::llm::LlmError> { Ok(vec![]) }
-            async fn ping(&self) -> Result<(), crate::llm::LlmError> { Ok(()) }
+            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
+            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
+            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
             fn provider_name(&self) -> &str { "echo" }
         }
 
@@ -905,7 +1122,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                // Attempt to read outside project root via traversal
                 files_to_read: vec!["../../etc/passwd".into()],
                 parent_id: None,
                 chain_id: None,
@@ -916,7 +1132,6 @@ mod tests {
         };
 
         let result = worker.execute(&task).await;
-        // Task should succeed (traversal is skipped, not fatal) but output must NOT contain passwd content
         assert!(result.result.is_ok());
         let output = result.result.unwrap();
         assert!(!output.contains("root:"), "path traversal succeeded — passwd content in output");

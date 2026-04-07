@@ -1,6 +1,6 @@
 //! File lock management to prevent concurrent agent edits.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use super::models::FileLock;
 
@@ -47,6 +47,19 @@ pub fn release_all_locks(conn: &Connection, task_id: &str) -> rusqlite::Result<u
         "DELETE FROM file_locks WHERE task_id = ?1",
         params![task_id],
     )
+}
+
+/// Check who holds the lock on a file. Returns the task ID if locked, None if free.
+///
+/// Expired locks are treated as free (not returned).
+pub fn check_lock(conn: &Connection, file_path: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT task_id FROM file_locks
+         WHERE file_path = ?1 AND (expires_at IS NULL OR expires_at >= unixepoch('now'))",
+        params![file_path],
+        |row| row.get(0),
+    )
+    .optional()
 }
 
 /// Clean up all expired locks.

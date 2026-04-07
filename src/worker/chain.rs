@@ -112,10 +112,7 @@ mod tests {
                 .collect();
             Ok((
                 ChatResponse {
-                    message: ChatMessage {
-                        role: "assistant".into(),
-                        content: user_msgs.join(" | "),
-                    },
+                    message: ChatMessage::text("assistant", user_msgs.join(" | ")),
                     model: "echo".into(),
                     done: true,
                     total_duration_ns: None,
@@ -202,10 +199,7 @@ mod tests {
                 }
                 Ok((
                     ChatResponse {
-                        message: ChatMessage {
-                            role: "assistant".into(),
-                            content: "ok".into(),
-                        },
+                        message: ChatMessage::text("assistant", "ok"),
                         model: "mock".into(),
                         done: true,
                         total_duration_ns: None,

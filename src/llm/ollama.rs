@@ -2,13 +2,28 @@
 //!
 //! This is the part everyone else skips. A real HTTP client that sends
 //! a real prompt to a real model and returns real text.
+//!
+//! ## Tool calling
+//!
+//! When `ChatRequest.tools` is `Some`, the request includes tool definitions
+//! and the response may contain `tool_calls` in the assistant message instead
+//! of (or alongside) text content. The caller drives the tool loop — this
+//! client is stateless and handles a single request/response round.
+//!
+//! Ollama wire format for tools:
+//! - Request: `"tools": [{ "type": "function", "function": { ... } }]`
+//! - Response: `"message": { "role": "assistant", "tool_calls": [{ "function": { "name": "...", "arguments": {...} } }] }`
+//! - Follow-up: `{ "role": "tool", "content": "...", "tool_name": "..." }` (not handled here — caller builds messages)
 
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
-use super::{ChatMessage, ChatRequest, ChatResponse, CompletionStats, LlmClient, LlmError};
+use super::{
+    ChatMessage, ChatRequest, ChatResponse, CompletionStats, LlmClient, LlmError, ToolCall,
+    ToolCallFunction, ToolDefinition,
+};
 
 /// Ollama API client.
 pub struct OllamaClient {
@@ -21,10 +36,12 @@ pub struct OllamaClient {
 #[derive(Serialize)]
 struct OllamaChatRequest {
     model: String,
-    messages: Vec<ChatMessage>,
+    messages: Vec<OllamaMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolDefinition>>,
 }
 
 #[derive(Serialize)]
@@ -33,6 +50,42 @@ struct OllamaOptions {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     num_predict: Option<i32>,
+}
+
+/// Ollama message wire type — supports both plain text and tool-related messages.
+///
+/// Separate from `ChatMessage` because Ollama's JSON shape differs slightly
+/// (e.g. `tool_calls` can be absent or present, `tool_name` on tool results).
+#[derive(Serialize, Deserialize, Debug)]
+struct OllamaMessage {
+    role: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OllamaToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+}
+
+/// Ollama's tool call wire format.
+#[derive(Serialize, Deserialize, Debug)]
+struct OllamaToolCall {
+    #[serde(rename = "type", default = "default_function")]
+    call_type: String,
+    function: OllamaToolCallFunction,
+}
+
+fn default_function() -> String {
+    "function".into()
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct OllamaToolCallFunction {
+    name: String,
+    arguments: serde_json::Value,
+    /// Ollama includes an `index` field for parallel tool calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    index: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -46,12 +99,6 @@ struct OllamaChatResponse {
     prompt_eval_count: Option<i32>,
     #[serde(default)]
     eval_count: Option<i32>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct OllamaMessage {
-    role: String,
-    content: String,
 }
 
 #[derive(Serialize)]
@@ -73,6 +120,53 @@ struct OllamaModelList {
 #[derive(Deserialize)]
 struct OllamaModelInfo {
     name: String,
+}
+
+// -- Conversions between internal and Ollama wire types --
+
+impl From<&ChatMessage> for OllamaMessage {
+    fn from(msg: &ChatMessage) -> Self {
+        Self {
+            role: msg.role.clone(),
+            content: msg.content.clone(),
+            tool_calls: msg.tool_calls.as_ref().map(|tcs| {
+                tcs.iter()
+                    .enumerate()
+                    .map(|(i, tc)| OllamaToolCall {
+                        call_type: "function".into(),
+                        function: OllamaToolCallFunction {
+                            name: tc.function.name.clone(),
+                            arguments: tc.function.arguments.clone(),
+                            index: Some(i as i32),
+                        },
+                    })
+                    .collect()
+            }),
+            tool_name: msg.tool_name.clone(),
+        }
+    }
+}
+
+impl From<OllamaMessage> for ChatMessage {
+    fn from(msg: OllamaMessage) -> Self {
+        let tool_calls = msg.tool_calls.map(|tcs| {
+            tcs.into_iter()
+                .map(|tc| ToolCall {
+                    call_type: tc.call_type,
+                    function: ToolCallFunction {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments,
+                    },
+                })
+                .collect()
+        });
+        Self {
+            role: msg.role,
+            content: msg.content,
+            tool_calls,
+            tool_name: msg.tool_name,
+        }
+    }
 }
 
 impl OllamaClient {
@@ -104,11 +198,17 @@ impl LlmClient for OllamaClient {
             None
         };
 
+        // Convert tools — pass None if empty to avoid sending an empty array
+        let tools = req
+            .tools
+            .filter(|t| !t.is_empty());
+
         let body = OllamaChatRequest {
             model: req.model.clone(),
-            messages: req.messages,
+            messages: req.messages.iter().map(OllamaMessage::from).collect(),
             stream: false, // Always non-streaming for now
             options,
+            tools,
         };
 
         let response = self
@@ -141,10 +241,7 @@ impl LlmClient for OllamaClient {
         let elapsed = start.elapsed();
 
         let chat_response = ChatResponse {
-            message: ChatMessage {
-                role: ollama_resp.message.role,
-                content: ollama_resp.message.content,
-            },
+            message: ChatMessage::from(ollama_resp.message),
             model: ollama_resp.model,
             done: ollama_resp.done,
             total_duration_ns: ollama_resp.total_duration,

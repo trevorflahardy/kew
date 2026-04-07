@@ -173,10 +173,7 @@ mod tests {
             tokio::time::sleep(self.latency).await;
             Ok((
                 ChatResponse {
-                    message: ChatMessage {
-                        role: "assistant".into(),
-                        content: "done".into(),
-                    },
+                    message: ChatMessage::text("assistant", "done"),
                     model: "mock".into(),
                     done: true,
                     total_duration_ns: None,

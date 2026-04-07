@@ -697,10 +697,7 @@ mod tests {
         ) -> Result<(ChatResponse, CompletionStats), LlmError> {
             Ok((
                 ChatResponse {
-                    message: ChatMessage {
-                        role: "assistant".into(),
-                        content: self.response.clone(),
-                    },
+                    message: ChatMessage::text("assistant", self.response.clone()),
                     model: "mock".into(),
                     done: true,
                     total_duration_ns: Some(100_000_000),

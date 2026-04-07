@@ -11,10 +11,16 @@ Claude Code  ──MCP──▶  kew_run / kew_context_*  ──▶  Worker Pool
                                               ▼            ▼            ▼
                                           Ollama      Claude API   (more agents)
                                               │            │
-                                              └────────────┘
-                                                     │
-                                              SQLite (.kew/kew.db)
-                                          tasks · context · embeddings
+                                              │    ┌───────┘
+                                              │    │  Agentic Tool Loop
+                                              │    │  ┌─ read_file ─┐
+                                              │    ├──┤  list_dir   ├──▶ filesystem
+                                              │    │  ├─ grep ──────┤
+                                              │    │  └─ write_file ┘
+                                              └────┘
+                                                │
+                                         SQLite (.kew/kew.db)
+                                     tasks · context · embeddings · locks
 ```
 
 > **Why kew?** Every AI tool wants to run a server, manage a daemon, or require a cloud subscription. kew is a binary you `cargo install`. Tasks are SQLite rows. Workers are tokio tasks. Results are embedded automatically so future tasks can find relevant context without you managing it. That's the whole system.
@@ -62,7 +68,7 @@ Each task follows this path:
 2. Worker atomically claims it via `UPDATE...RETURNING` — no double-claiming possible
 3. Context loads: explicit keys + optional vector similarity search over past results
 4. File locks acquired if specified (TTL-based, auto-expire)
-5. LLM called via `reqwest` to Ollama `/api/chat` or Claude Messages API
+5. **Agentic tool loop** — LLM called with tool definitions (`read_file`, `list_dir`, `grep`, `write_file`). If the model calls a tool, the worker executes it and feeds the result back. Loop repeats until the model produces a final text answer or hits the 25-iteration cap.
 6. Result stored: status, output, token counts, duration — all in SQLite
 7. Result embedded with `nomic-embed-text` for future retrieval
 8. Locks released
@@ -138,6 +144,47 @@ tier: code
 system_prompt: |
   You are a ...
 ```
+
+---
+
+## Agent tools — agentic file access
+
+kew agents are not one-shot prompt-in/text-out calls. They run an **agentic tool loop**: the LLM can call sandboxed filesystem tools mid-generation to explore the codebase, search for patterns, and write files. The loop continues until the model produces a final text response.
+
+| Tool         | Description                                                      | Locks required? |
+| ------------ | ---------------------------------------------------------------- | --------------- |
+| `read_file`  | Read a file with optional line range (100 KB cap, line numbers)  | No              |
+| `list_dir`   | List directory contents with types and sizes                     | No              |
+| `grep`       | Regex search across files with optional glob filter              | No              |
+| `write_file` | Write/overwrite a file (creates parent dirs, 1 MB cap)           | Advisory check  |
+
+### How it works
+
+```
+User prompt → LLM (with tool definitions)
+                ↓
+         ┌──── Does the response contain tool_calls? ────┐
+         │ YES                                            │ NO
+         ▼                                                ▼
+   Execute tools (sandboxed)                       Final text response
+   Append results to conversation                  → stored as task result
+   Send back to LLM ──────────────────────────────▶ (loop, max 25 iterations)
+```
+
+### Security model
+
+- All paths resolve relative to the project root. Path traversal (`../`) is blocked via `canonicalize()` + `starts_with()` checks.
+- `write_file` checks advisory locks — if another task holds a lock on the file, the write is rejected.
+- Reads are always free — no locks needed. Multiple agents can read the same file concurrently.
+- Binary files are skipped by `grep`. Hidden directories (except `.kew`) and `target/`, `node_modules/`, `.git/` are excluded from walks.
+- Max 25 tool-call iterations per task to prevent runaway agents.
+
+### Supported providers
+
+Both Ollama and Claude API support tool calling. kew translates tool definitions and results to each provider's native wire format:
+
+- **Ollama** — `tools` array in request, `tool_calls` in assistant message, `role: "tool"` for results
+- **Claude** — `tools` with `input_schema`, `tool_use` content blocks, `tool_result` blocks
 
 ---
 
@@ -298,6 +345,7 @@ Locks are TTL-based (default 600s), released on task completion, and auto-expire
 | MCP schemas   | `schemars`                  |
 | Vectors       | `zerocopy`                  |
 | Errors        | `thiserror` + `anyhow`      |
+| Regex         | `regex`                     |
 | Logging       | `tracing`                   |
 
 Feature flags — build without optional components:
@@ -325,7 +373,7 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
-78 tests across all layers. Worker and MCP tests use mock LLM clients — no external services needed. Database tests use SQLite `:memory:`.
+112 tests across all layers. Worker and MCP tests use mock LLM clients — no external services needed. Database tests use SQLite `:memory:`. The agentic tool loop is tested with a `ToolCallingMock` that simulates multi-round tool calls before producing a final answer.
 
 ---
 
