@@ -9,3 +9,4 @@ agents/
 **/*.rs.bk.*
 **/Cargo.lock
 **/Cargo.toml.*
+Cargo.lock
