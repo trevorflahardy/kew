@@ -44,6 +44,8 @@ struct DetailInfo {
     result: Option<String>,
     error: Option<String>,
     duration_ms: Option<i64>,
+    prompt_tokens: Option<i32>,
+    completion_tokens: Option<i32>,
     log_chunks: Vec<String>,
 }
 
@@ -162,6 +164,8 @@ impl App {
             result: task.result,
             error: task.error,
             duration_ms: task.duration_ms,
+            prompt_tokens: task.prompt_tokens,
+            completion_tokens: task.completion_tokens,
             log_chunks,
         });
         // Auto-scroll: bump scroll to a large value; ratatui clamps it to content height.
@@ -450,21 +454,37 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
         })
         .unwrap_or_else(|| "in progress".into());
 
+    let tokens_per_sec_str = match (detail.duration_ms, detail.prompt_tokens, detail.completion_tokens) {
+        (Some(d), Some(p), Some(c)) if d > 0 => {
+            let total = (p + c) as f64;
+            let secs = d as f64 / 1000.0;
+            Some(format!("{:.0} tok/s ({p}+{c})", total / secs))
+        }
+        _ => None,
+    };
+
     let header_text = vec![
         Line::from(vec![
             Span::styled("  ID:     ", Style::default().fg(Color::DarkGray)),
             Span::raw(&detail.id),
         ]),
-        Line::from(vec![
-            Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&detail.status, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-            Span::styled("   Model: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(&detail.model),
-            Span::styled("   Agent: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(detail.agent.as_deref().unwrap_or("—")),
-            Span::styled("   Duration: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(&duration_str),
-        ]),
+        Line::from({
+            let mut spans = vec![
+                Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&detail.status, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                Span::styled("   Model: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(&detail.model),
+                Span::styled("   Agent: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(detail.agent.as_deref().unwrap_or("—")),
+                Span::styled("   Duration: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(&duration_str),
+            ];
+            if let Some(ref tps) = tokens_per_sec_str {
+                spans.push(Span::styled("   Speed: ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(tps.as_str(), Style::default().fg(Color::Cyan)));
+            }
+            spans
+        }),
         Line::from(vec![
             Span::styled("  Prompt: ", Style::default().fg(Color::DarkGray)),
             Span::raw(if detail.prompt.len() > (area.width as usize).saturating_sub(12) {

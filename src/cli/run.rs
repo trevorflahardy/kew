@@ -316,6 +316,12 @@ pub async fn execute(
             Ok(Ok(work_result)) => match work_result.result {
                 Ok(text) => {
                     if args.json {
+                        let tokens_per_sec = match (work_result.stats.duration_ms, work_result.stats.prompt_tokens, work_result.stats.completion_tokens) {
+                            (Some(d), Some(p), Some(c)) if d > 0 => {
+                                Some((p + c) as f64 / (d as f64 / 1000.0))
+                            }
+                            _ => None,
+                        };
                         let json = serde_json::json!({
                             "task_id": work_result.task_id,
                             "status": "done",
@@ -324,6 +330,7 @@ pub async fn execute(
                             "duration_ms": work_result.stats.duration_ms,
                             "prompt_tokens": work_result.stats.prompt_tokens,
                             "completion_tokens": work_result.stats.completion_tokens,
+                            "tokens_per_sec": tokens_per_sec,
                         });
                         println!("{}", serde_json::to_string_pretty(&json)?);
                     } else {
