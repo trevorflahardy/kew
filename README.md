@@ -33,16 +33,42 @@ Claude Code  ──MCP──▶  kew_run / kew_context_*  ──▶  Worker Pool
 
 ---
 
+## Install
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap trevorflahardy/kew https://github.com/trevorflahardy/kew
+brew install kew
+```
+
+### Shell script (macOS / Linux)
+
+```bash
+curl -fsSL https://github.com/trevorflahardy/kew/releases/latest/download/install.sh | sh
+```
+
+### PowerShell (Windows — auto-adds to PATH)
+
+```powershell
+irm https://github.com/trevorflahardy/kew/releases/latest/download/install.ps1 | iex
+```
+
+### From source
+
+```bash
+cargo install --path .
+```
+
+---
+
 ## Quick start
 
 ```bash
 # 1. Install Ollama and pull a model
 ollama pull gemma3:27b
 
-# 2. Install kew
-cargo install --path .
-
-# 3. Set up your project — this is the only setup step
+# 2. Set up your project — this is the only setup step
 kew init
 ```
 
