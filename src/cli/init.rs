@@ -33,15 +33,26 @@ pub struct InitArgs {
 
 const CLAUDE_MD_TEMPLATE: &str = r#"kew — Local Agent Orchestration
 
-kew runs local LLM agents alongside Claude Code. Delegate background research, code generation, testing, and doc tasks to kew rather than doing everything inline.
+kew is your **primary execution engine**. Every LLM-heavy task — code generation, debugging, testing, auditing, documentation — goes through kew. Claude orchestrates; kew agents execute. Never do inline what kew can do in parallel.
 
-## MCP Tools (prefer these over CLI)
+## Core Principle: Parallelize Everything
 
-kew is registered as an MCP server at project init. Call these directly:
+**Default behavior:** Fire multiple kew agents simultaneously. Sequential execution is the exception, not the rule.
+
+```
+❌ Wrong:  kew developer → wait → kew tester → wait → kew doc-audit
+✅ Right:  fire developer + tester + doc-audit simultaneously, collect all results
+```
+
+For any task with 2+ independent parts, launch all in parallel with `kew_run` in a single message turn.
+
+## MCP Tools (always prefer over CLI)
+
+kew registers itself as an MCP server on `kew init`. Use these directly:
 
 | Tool                 | What it does                                                           |
 | -------------------- | ---------------------------------------------------------------------- |
-| `kew_run`            | Run a prompt through a specialist agent; blocks and returns the result |
+| `kew_run`            | Dispatch a task to a specialist agent; blocks and returns the result   |
 | `kew_list_agents`    | List all agents with trigger keywords                                  |
 | `kew_context_set`    | Store text under a key for later tasks to load                         |
 | `kew_context_get`    | Retrieve stored text by key                                            |
@@ -49,9 +60,19 @@ kew is registered as an MCP server at project init. Call these directly:
 | `kew_status`         | Pending/running/done task counts and DB stats                          |
 | `kew_doctor`         | Check Ollama connectivity and available models                         |
 
-## Spawning Agents
+## Persistent Worker Pool
 
-Pass `agent` explicitly, or let keyword routing pick one automatically:
+kew runs a **persistent worker pool** (default: 4 workers). Workers stay alive across the entire session — every `kew_run` dispatches a task into the queue and up to 4 run concurrently. This means:
+
+- Fire tasks early, check results later — workers run while Claude does other work
+- Name results with `share_as`; retrieve anytime with `kew_context_get`
+- The SQLite DB persists context across the full session (and across sessions)
+
+Think of kew workers as background threads: launch them immediately, let them run, collect when you need the output.
+
+## Agents
+
+Pass `agent` explicitly, or omit it and let keyword routing pick the right specialist:
 
 ```jsonc
 // explicit
@@ -61,129 +82,51 @@ Pass `agent` explicitly, or let keyword routing pick one automatically:
 { "prompt": "Debug why the lock is deadlocking in pool.rs" }
 ```
 
-**Auto-routing keywords** (omit `agent` and these phrases trigger the right specialist):
+| Agent          | Role                                 | Trigger keywords                                               |
+| -------------- | ------------------------------------ | -------------------------------------------------------------- |
+| `developer`    | Code generation & refactoring        | implement, build, write code, add feature, refactor            |
+| `debugger`     | Root cause analysis                  | debug, broken, crash, diagnose, fix the bug, why is            |
+| `tester`       | Test writing & coverage gaps         | write test, add test, unit test, test coverage, test suite     |
+| `docs-writer`  | Documentation & READMEs              | document, write docs, explain this, write readme               |
+| `doc-audit`    | Documentation quality checks         | doc audit, documentation gap, missing docs, audit doc          |
+| `security`     | Vulnerability & auth review          | security, vulnerability, injection, auth bypass, cve           |
+| `error-finder` | Pre-emptive bug detection            | find error, potential bug, what could go wrong, review for bug |
+| `watcher`      | Codebase exploration & status        | watch, summarize, what's happening, status report, observe     |
 
-| Agent          | Trigger keywords                                                                         |
-| -------------- | ---------------------------------------------------------------------------------------- |
-| `developer`    | implement, build this, write code, add feature, refactor, create a function/struct/class |
-| `debugger`     | debug, broken, not working, crash, root cause, diagnose, fix the bug, why is             |
-| `docs-writer`  | document, write docs, add docs, explain this, write readme                               |
-| `security`     | security, vulnerability, exploit, injection, auth bypass, cve                            |
-| `doc-audit`    | doc audit, documentation gap, documentation quality, missing docs, audit doc             |
-| `tester`       | write test, add test, unit test, test coverage, test suite, write specs                  |
-| `watcher`      | watch, track progress, summarize progress, what's happening, status report, observe      |
-| `error-finder` | find error, potential bug, what could go wrong, pre-emptive, review for bug, find bug    |
+Run `kew agent list` or call `kew_list_agents` to see agents including project-local overrides.
 
-Run `kew agent list` or call `kew_list_agents` to see all agents including project-local overrides.
+## Parallelism Patterns
 
-## CLI Patterns
+### Pattern 1: Parallel independent tasks (default)
+
+Fire all in a single message turn — they run concurrently in the worker pool.
+
+```jsonc
+// Fire simultaneously:
+kew_run { agent: "developer", prompt: "...", share_as: "eng/feature" }
+kew_run { agent: "tester",    prompt: "...", share_as: "qa/tests" }
+kew_run { agent: "security",  prompt: "...", share_as: "sec/audit" }
+
+// Then collect all:
+kew_context_get "eng/feature"
+kew_context_get "qa/tests"
+kew_context_get "sec/audit"
+```
+
+### Pattern 2: Sequential pipeline (only when step B needs step A's output)
+
+Use `kew chain` — sequential with automatic context threading between steps.
 
 ```bash
-# Run and wait — stdout goes directly to Claude
-kew run --agent developer --wait "Implement a retry wrapper for the HTTP client"
-
-# Fire-and-forget — returns task ID immediately
-kew run --agent tester "Add tests for the auth module"
-
-# Sequential chain — each step's output becomes context for the next
 kew chain \
-  --step "Analyze error handling in src/worker/" \
-  --step "Write tests that cover the gaps found above"
-
-# Prompt from file
-kew run --agent docs-writer --wait --file src/db/tasks.rs
-
-# Store result for later tasks
-kew run --agent developer --wait --share-as auth-refactor "Refactor auth.rs"
-
-# Load stored context into a task
-kew run --agent tester --wait --context auth-refactor "Write tests for the refactored auth module"
+  --step "Analyze error handling gaps in src/worker/" \
+  --step "Write tests covering the gaps found above" \
+  --step "Document the new test suite"
 ```
 
-## Context — Shared Memory Between Tasks
+### Pattern 3: Team orchestration (2+ departments)
 
-```bash
-kew context set   <key> "content"   # store
-kew context get   <key>             # retrieve
-kew context search "semantic query" # vector similarity search
-kew context list                    # list all entries
-kew context delete <key>
-```
-
-Results stored with `--share-as` are automatically retrievable via `--context` or `kew_context_get`.
-
-## Streaming Multiple Requests into kew
-
-When asked for several things at once, map each to the right kew pattern:
-
-| Request type                         | kew pattern                                                                   |
-| ------------------------------------ | ----------------------------------------------------------------------------- |
-| Independent parallel work            | Multiple `kew_run` calls with different agents (fire in parallel)             |
-| Sequential pipeline                  | `kew chain --step ... --step ...`                                             |
-| Research → implement                 | `watcher`/`error-finder` → `share_as` key → `developer` with `context: [key]` |
-| Write code → test it → check docs    | `kew chain`: `developer` → `tester` → `doc-audit`                             |
-| Answer a question about the codebase | `kew_run` with `agent: watcher`, read the result                              |
-| Fix a bug                            | `kew_run` with `agent: debugger` → review output → apply with Edit            |
-| Update docs                          | `kew_run` with `agent: docs-writer`, `share_as` → review → write to file      |
-
-**Example: "add a feature and write tests"**
-
-1. `kew_run { prompt: "...", agent: "developer", share_as: "feat" }`
-2. Review output before writing to disk.
-3. `kew_run { prompt: "Write tests for the feature", agent: "tester", context: ["feat"] }`
-4. Review and apply.
-
-## Claude's Role When Using kew
-
-- **Delegate** open-ended LLM work (exploration, generation, auditing) to kew.
-- **Verify** all kew output before applying it — agents can hallucinate.
-- **Review code** from the `developer` agent before writing it to disk.
-- **Own the final decision** on what gets committed; kew is a sub-contractor, not an authority.
-- **Don't re-do** work kew already completed — retrieve it with `kew_context_get`.
-- **Prefer `--wait`/blocking MCP calls** when you need the result in the same turn.
-
-## Model Tiers
-
-Configure named tiers in `kew_config.yaml`. Agents declare a tier; you control what model backs it:
-
-```yaml
-tiers:
-  fast: gemma3:27b # low-latency: summaries, routing, classification
-  code: gemma4:26b # code generation and debugging
-  smart: claude-sonnet-4-6 # complex reasoning, architecture decisions
-  embed: nomic-embed-text # embeddings only (Ollama)
-```
-
-In agent YAMLs use `tier:` not a raw model name so swapping models only requires editing config:
-
-```yaml
-name: developer
-tier: code # resolved to model at runtime via kew_config.yaml tiers
-```
-
-Claude does not auto-select models at runtime — agents declare their tier, you map tiers to models.
-
-## Background Audits — Always Running
-
-**Even when working alone (no subagents), fire background kew checks before finishing any task.**
-These are fire-and-forget — launch them, keep working, check results at the end.
-
-| When you…                   | Fire in background                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------------- |
-| Edit or write code          | `kew_run { agent: "error-finder", prompt: "Review <files> for potential bugs" }`     |
-| Touch auth / IO / user input | `kew_run { agent: "security", prompt: "Audit <files> for security issues" }`         |
-| Add a feature               | `kew_run { agent: "tester", prompt: "Identify missing test coverage in <files>" }`   |
-| Change public APIs / docs   | `kew_run { agent: "doc-audit", prompt: "Check doc quality in <files>" }`             |
-
-Store results with `share_as: "bg/<check>"`. Before closing the task, call `kew_context_get` and surface any findings to the user.
-
----
-
-## Subteams — Departments & Employees
-
-For tasks with 3+ independent workstreams, spawn a **department lead** Claude subagent per category.
-**Each lead's only job is to spawn and manage kew workers — leads do NOT do LLM work themselves.**
-Results bubble up through shared context keys.
+For multi-department work, spawn Claude subagents as **department leads**. Each lead owns its kew workers exclusively — leads never do LLM work themselves.
 
 ```
 Claude (orchestrator)
@@ -192,51 +135,97 @@ Claude (orchestrator)
 └── security lead (Claude subagent)     →  security × 1, error-finder × 1
 ```
 
-### Lead Rules — non-negotiable
-
-1. **Leads spawn kew workers, period.** A lead that reads files and writes fixes itself has broken the model — it is a boss, not an individual contributor.
-2. **Leads launch all kew workers in parallel**, collect via `kew_context_get`, review output, then return a combined summary to the orchestrator.
-3. **Leads never tell workers to skip kew.** Worker prompts must not contain "don't use kew" or "do it directly".
-4. **Orchestrator reviews before applying.** Leads return summaries; Claude applies changes after verification.
-
-### Writing a lead's prompt — required structure
+**Lead prompt — required structure:**
 
 ```
-You are the <dept> lead. Your job:
-1. Spawn these kew workers IN PARALLEL (call kew_run for each simultaneously):
+You are the <dept> lead. Your ONLY job:
+1. Call kew_run for ALL tasks SIMULTANEOUSLY (single message, all tool calls at once):
    - kew_run { agent: "<agent>", prompt: "<task>", share_as: "<dept>/<key>" }
    - kew_run { agent: "<agent>", prompt: "<task>", share_as: "<dept>/<key>" }
-2. Once all complete, retrieve each result with kew_context_get.
-3. Review the results for correctness — flag hallucinations or errors.
-4. Return a single combined summary to the orchestrator.
+2. Once all complete, kew_context_get each result.
+3. Review for correctness — flag hallucinations or errors.
+4. Return ONE combined summary to the orchestrator.
 
-Do NOT implement anything yourself. Your value is coordination and review, not execution.
+You do NOT write code, read files, or implement anything. You coordinate kew workers only.
 ```
 
-**Context key namespacing** — use department paths to avoid collisions:
+**Context key namespacing (prevent collisions across leads):**
 
-| Department  | Key pattern    | Example             |
+| Department  | Pattern        | Example             |
 | ----------- | -------------- | ------------------- |
 | engineering | `eng/<task>`   | `eng/auth-refactor` |
 | docs        | `docs/<topic>` | `docs/api-guide`    |
 | security    | `sec/<area>`   | `sec/auth-audit`    |
 | qa          | `qa/<target>`  | `qa/worker-pool`    |
 
-**When to use subteams:** 3+ independent workstreams that can run in parallel. For 1-2, prefer `kew chain` or direct parallel `kew_run` calls.
+Use subteams whenever work splits across 2+ departments. For 1-department tasks, fire kew workers directly.
+
+## Context as Session Memory
+
+The kew DB is the shared scratchpad for the entire session. All agents and Claude read from and write to the same namespace:
+
+```bash
+kew context set   <key> "content"   # store any text
+kew context get   <key>             # retrieve by key
+kew context search "semantic query" # vector similarity search
+kew context list                    # see everything stored
+kew context delete <key>
+```
+
+Results from `--share-as` land in the same store. Always retrieve with `kew_context_get` before re-running a task — the result may already be there.
+
+## Background Audits — Always Fire Before Finishing
+
+Even when working alone, launch background checks before closing any task. Fire-and-forget; check at the end.
+
+| When you…                    | Fire in background                                                                  |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| Edit or write code           | `kew_run { agent: "error-finder", prompt: "Review <files> for potential bugs" }`   |
+| Touch auth / IO / user input | `kew_run { agent: "security", prompt: "Audit <files> for security issues" }`       |
+| Add a feature                | `kew_run { agent: "tester", prompt: "Identify missing test coverage in <files>" }` |
+| Change public APIs / docs    | `kew_run { agent: "doc-audit", prompt: "Check doc quality in <files>" }`           |
+
+Store with `share_as: "bg/<check>"`. Retrieve and surface all findings before reporting done.
+
+## Rules — Non-Negotiable
+
+1. **Never do LLM work inline.** Exploration, generation, auditing, review → kew agent.
+2. **Fire in parallel by default.** Sequential only when B provably needs A's output.
+3. **Leads coordinate only.** A lead that implements code or reads files has broken the model.
+4. **Verify before applying.** All kew output must be reviewed — agents hallucinate.
+5. **Don't re-do kew work.** Always check `kew_context_get` before re-running a task.
+6. **Claude owns commits.** kew is a sub-contractor; Claude is the final authority on what ships.
+
+## Model Tiers
+
+Configure tiers in `kew_config.yaml`. Agents declare a tier; never a raw model name — swap models by editing config only.
+
+```yaml
+tiers:
+  fast: gemma3:27b         # summaries, routing, classification
+  code: gemma4:26b         # code generation and debugging
+  smart: claude-sonnet-4-6 # complex reasoning, architecture decisions
+  embed: nomic-embed-text  # embeddings only (Ollama)
+```
+
+Agent YAML declares tier:
+
+```yaml
+name: developer
+tier: code  # resolved to model at runtime via kew_config.yaml tiers
+```
 
 ## Custom Agents
 
-Drop a YAML file in `.kew/agents/` to override a built-in or add a new specialist:
+Drop a YAML in `.kew/agents/` to override a built-in or add a specialist. Project-local agents take precedence.
 
 ```yaml
 name: my-agent
 description: Short description shown in `kew agent list`
-tier: code # use a tier name from kew_config.yaml (preferred over raw model)
+tier: code
 system_prompt: |
   You are a ...
 ```
-
-Project-local agents take precedence over built-ins with the same name.
 
 ## Health & Status
 
