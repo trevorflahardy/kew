@@ -2,8 +2,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::db::models::Task;
 use crate::db::Database;
@@ -202,20 +203,54 @@ impl SharedPool {
             });
         }
 
+        // Watchdog: every 60s, find tasks stuck in 'running' with no log progress
+        // for >5 minutes and mark them failed. This catches hung Ollama calls and
+        // stalled tool loops — tool-calling agents write a log chunk on every LLM
+        // iteration, so no log progress reliably means the worker is frozen.
+        let watchdog_db = db.clone();
+        tokio::spawn(async move {
+            const IDLE_SECS: i64 = 300; // 5 minutes without log activity = stuck
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.tick().await; // skip the immediate first tick
+            loop {
+                interval.tick().await;
+                let conn = watchdog_db.conn();
+                match crate::db::tasks::find_stuck_task_ids(&conn, IDLE_SECS) {
+                    Ok(ids) if !ids.is_empty() => {
+                        for id in &ids {
+                            warn!(task_id = %id, "watchdog: task has had no log progress for >5m — marking failed");
+                            let _ = crate::db::tasks::mark_failed(
+                                &conn,
+                                id,
+                                "watchdog: no progress for 5 minutes (hung LLM call or stalled tool loop)",
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("watchdog DB scan failed: {e}"),
+                }
+            }
+        });
+
         info!(workers = size, "shared pool started");
         Self { task_tx }
     }
 
     /// Submit a task and await its result.
-    /// Returns an error only if the pool has shut down.
+    /// Returns an error only if the pool has shut down or the task times out.
+    ///
+    /// Hard deadline: 10 minutes. The watchdog will mark stuck tasks failed at 5
+    /// minutes of idle, but this timeout is a backstop for cases where the DB
+    /// write itself is delayed or the worker crashes without sending a reply.
     pub async fn submit(&self, task: Task) -> anyhow::Result<WorkResult> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.task_tx
             .send((task, reply_tx))
             .await
             .map_err(|_| anyhow::anyhow!("shared pool channel closed"))?;
-        reply_rx
+        tokio::time::timeout(Duration::from_secs(600), reply_rx)
             .await
+            .map_err(|_| anyhow::anyhow!("task timed out after 10 minutes"))?
             .map_err(|_| anyhow::anyhow!("worker dropped reply before sending result"))
     }
 

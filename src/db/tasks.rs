@@ -219,6 +219,29 @@ pub fn count_by_status(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>
     rows.collect()
 }
 
+/// Find IDs of tasks stuck in 'running' with no log progress for `idle_secs` seconds.
+///
+/// A task is considered stuck if it has been `running` and either:
+/// - Has no log entries at all and `started_at` is older than `idle_secs`, OR
+/// - Its most recent log entry is older than `idle_secs`.
+///
+/// Tool-calling agents write a log chunk on every LLM iteration, so stale logs
+/// reliably indicate a hung Ollama call or a stalled tool loop.
+pub fn find_stuck_task_ids(conn: &Connection, idle_secs: i64) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id FROM tasks t
+         WHERE t.status = 'running'
+         AND (
+             (NOT EXISTS (SELECT 1 FROM task_logs l WHERE l.task_id = t.id)
+              AND t.started_at < unixepoch('now') - ?1)
+             OR
+             (SELECT MAX(l2.created_at) FROM task_logs l2 WHERE l2.task_id = t.id) < unixepoch('now') - ?1
+         )",
+    )?;
+    let rows = stmt.query_map(params![idle_secs], |row| row.get(0))?;
+    rows.collect()
+}
+
 /// Sum prompt and completion tokens across all completed tasks.
 /// Returns `(prompt_tokens, completion_tokens)`.
 pub fn sum_tokens(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
