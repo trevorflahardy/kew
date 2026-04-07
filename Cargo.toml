@@ -1,6 +1,6 @@
 [package]
 name = "kew"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Real local agent orchestration"
 license = "MIT"
@@ -19,7 +19,10 @@ clap = { version = "4", features = ["derive", "env"] }
 atty = "0.2"
 
 # HTTP
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
