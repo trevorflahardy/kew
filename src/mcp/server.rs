@@ -29,10 +29,15 @@ pub struct KewMcpServer {
 }
 
 impl KewMcpServer {
-    pub fn new(db: Database, ollama_url: &str) -> Self {
+    /// Create a new MCP server.
+    ///
+    /// `workers` controls the size of the shared worker pool — how many LLM
+    /// tasks can run concurrently. Read this from `KewConfig::workers(4)` so
+    /// the value in `kew_config.yaml` is respected.
+    pub fn new(db: Database, ollama_url: &str, workers: usize) -> Self {
         let ollama: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(ollama_url));
         let tool_router = Self::tool_router();
-        let pool = Arc::new(SharedPool::start(db.clone(), ollama.clone(), None, 4));
+        let pool = Arc::new(SharedPool::start(db.clone(), ollama.clone(), None, workers));
         Self {
             db,
             ollama,
@@ -640,6 +645,7 @@ mod tests {
             tool_router,
             pool,
         }
+
     }
 
     #[tokio::test]
@@ -953,8 +959,12 @@ mod tests {
 }
 
 /// Start the MCP server on stdio.
-pub async fn serve(db: Database, ollama_url: &str) -> anyhow::Result<()> {
-    let server = KewMcpServer::new(db, ollama_url);
+///
+/// Reads `kew_config.yaml` from the current directory to resolve the worker
+/// count. The CLI-supplied `ollama_url` takes precedence over the config file
+/// value so that `--ollama-url` flags still work as expected.
+pub async fn serve(db: Database, ollama_url: &str, workers: usize) -> anyhow::Result<()> {
+    let server = KewMcpServer::new(db, ollama_url, workers);
     let service = server
         .serve((tokio::io::stdin(), tokio::io::stdout()))
         .await

@@ -1,19 +1,26 @@
 //! `kew mcp serve` — start the MCP server on stdio.
+//!
+//! Loads `kew_config.yaml` from the current directory to resolve runtime
+//! settings (e.g. worker pool size) before starting the server. CLI flags
+//! always take precedence over config file values.
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
+use crate::config::KewConfig;
 use crate::db::Database;
 
+/// Arguments for the `kew mcp` subcommand.
 #[derive(Args)]
 pub struct McpArgs {
     #[command(subcommand)]
     pub command: McpCommands,
 }
 
+/// MCP subcommands.
 #[derive(Subcommand)]
 pub enum McpCommands {
-    /// Start the MCP server (stdio transport)
+    /// Start the MCP server on stdio for Claude Code integration.
     Serve,
 }
 
@@ -23,7 +30,12 @@ pub async fn execute(args: &McpArgs, db_path: &str, ollama_url: &str) -> Result<
         McpCommands::Serve => {
             let db =
                 Database::open(std::path::Path::new(db_path)).context("failed to open database")?;
-            crate::mcp::server::serve(db, ollama_url).await
+
+            // Load project config — missing file is fine, defaults are used.
+            let cfg = KewConfig::load_cwd().unwrap_or_default();
+            let workers = cfg.workers(4);
+
+            crate::mcp::server::serve(db, ollama_url, workers).await
         }
     }
 }

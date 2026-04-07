@@ -5,6 +5,7 @@
 
 pub mod agents;
 pub mod cli;
+pub mod config;
 pub mod db;
 pub mod llm;
 pub mod mcp;
