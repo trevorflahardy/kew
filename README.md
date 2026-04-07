@@ -1,15 +1,23 @@
 # kew
 
-**Local agent orchestration for Claude Code.**
+**Real agent orchestration for Claude Code. Install it. Forget about it. Save tokens.**
 
-A single Rust binary. Runs LLM agents — local via Ollama or cloud via Claude — coordinates them through SQLite, and integrates with Claude Code as a CLI tool and MCP server. No daemon. No IPC. No infra.
+kew offloads LLM-heavy work — code generation, debugging, testing, security audits, documentation — from Claude Code to local models running on your machine via Ollama. One `cargo install`, one `kew init`, and Claude Code automatically gains a team of specialist agents that run in parallel on cheap local models while Claude focuses on orchestration.
+
+### What makes kew different
+
+- **Actually autonomous.** `kew init` writes the MCP config, injects a CLAUDE.md that teaches Claude how to use kew, sets up a live status line, and configures the SQLite database. There is nothing else to do — Claude Code discovers kew's tools automatically and starts dispatching work to local agents on its own.
+- **Saves tokens at scale.** Every task that kew handles locally is work that Claude doesn't burn API tokens on. Code generation, test writing, security reviews, doc audits — all run through Ollama on your hardware. Claude only sees the final results, not the intermediate reasoning.
+- **Real agents, not wrappers.** kew agents run an agentic tool loop — they can read files, search codebases, list directories, and write files mid-generation. They're not one-shot prompt-in/text-out calls. They explore your codebase and produce grounded results.
+- **Parallel by default.** A persistent worker pool (default: 4 concurrent tokio tasks) means Claude can fire off a developer, tester, and security auditor simultaneously. Results land in SQLite; Claude collects them when ready.
+- **Zero infrastructure.** Single Rust binary. SQLite database. No daemon, no Docker, no cloud subscription, no IPC. Tasks are rows. Context is rows. Embeddings are rows.
 
 ```
 Claude Code  ──MCP──▶  kew_run / kew_context_*  ──▶  Worker Pool (tokio)
                                                             │
                                               ┌────────────┼────────────┐
                                               ▼            ▼            ▼
-                                          Ollama      Claude API   (more agents)
+                                          Ollama      Claude API   (more providers)
                                               │            │
                                               │    ┌───────┘
                                               │    │  Agentic Tool Loop
@@ -23,41 +31,68 @@ Claude Code  ──MCP──▶  kew_run / kew_context_*  ──▶  Worker Pool
                                      tasks · context · embeddings · locks
 ```
 
-> **Why kew?** Every AI tool wants to run a server, manage a daemon, or require a cloud subscription. kew is a binary you `cargo install`. Tasks are SQLite rows. Workers are tokio tasks. Results are embedded automatically so future tasks can find relevant context without you managing it. That's the whole system.
-
 ---
 
 ## Quick start
 
 ```bash
-# Requires Ollama running locally
+# 1. Install Ollama and pull a model
 ollama pull gemma3:27b
+
+# 2. Install kew
 cargo install --path .
 
-# Run a task and wait for output
-kew run -m gemma3:27b -w "Write a prime checker in Python"
+# 3. Set up your project — this is the only setup step
+kew init
 ```
 
-For Claude:
+That's it. `kew init` does everything:
+
+- Creates `.kew/` with the SQLite database
+- Writes `.mcp.json` so Claude Code discovers kew as an MCP server
+- Generates a `CLAUDE.md` that teaches Claude how to orchestrate kew agents
+- Installs a live status line showing running tasks, token usage, and DB stats
+- Adds `.kew/` to `.gitignore`
+
+**Start a new Claude Code session and it just works.** Claude reads the CLAUDE.md, sees the MCP tools, and begins dispatching work to kew agents automatically. You don't need to prompt it — it knows when to use `kew_run` for code generation, testing, debugging, and audits.
+
+### Manual usage (optional)
+
+You can also use kew directly from the CLI:
 
 ```bash
+# Run a task locally and wait for output
+kew run -m gemma3:27b -w "Write a prime checker in Python"
+
+# Use Claude API instead (models starting with claude- route automatically)
 export ANTHROPIC_API_KEY="sk-ant-..."
 kew run -m claude-sonnet-4-6 -w "Explain Rust lifetimes in 3 sentences"
 ```
 
-Models starting with `claude-` route to the Anthropic API; everything else goes to Ollama.
+---
 
-### Set up for a project
+## How Claude Code uses kew
 
-```bash
-kew init
+When you ask Claude Code to implement a feature, fix a bug, or review code in a kew-enabled project, here's what happens behind the scenes:
+
+```
+You: "Add rate limiting to the API and make sure it's secure"
+
+Claude Code (reads CLAUDE.md, sees kew MCP tools):
+  ├── kew_run { agent: "developer", prompt: "Implement rate limiting..." }    ─┐
+  ├── kew_run { agent: "security",  prompt: "Audit rate limiting for..." }    ─┤ parallel
+  └── kew_run { agent: "tester",    prompt: "Write tests for rate limit..." } ─┘
+                         │
+              All 3 run simultaneously on Ollama (local, free)
+              Claude waits, then reviews all results
+              Claude applies the code, informed by the security audit
 ```
 
-Creates `.kew/` with the SQLite database, scaffolds `kew_config.yaml`, writes `.mcp.json` for Claude Code, installs the status line script, and adds `.kew/` to `.gitignore`.
+Claude stays in the orchestrator role — planning, reviewing, committing. The heavy LLM work (generating code, analyzing security, writing tests) runs locally through kew's worker pool. Your API token spend drops because Claude only processes the final outputs, not the multi-turn reasoning each agent did to get there.
 
 ---
 
-## How it works
+## Under the hood
 
 <details>
 <summary><strong>Task lifecycle</strong> — from submission to result</summary>
@@ -147,9 +182,9 @@ system_prompt: |
 
 ---
 
-## Agent tools — agentic file access
+## Agent tools — real agentic execution
 
-kew agents are not one-shot prompt-in/text-out calls. They run an **agentic tool loop**: the LLM can call sandboxed filesystem tools mid-generation to explore the codebase, search for patterns, and write files. The loop continues until the model produces a final text response.
+This is what separates kew from prompt wrappers. Agents don't just receive a prompt and return text — they run a **multi-turn tool loop** where the LLM can explore your codebase mid-generation. An agent asked to "refactor the auth module" will read the files, grep for usage patterns, understand the structure, and then write the refactored code — all autonomously.
 
 | Tool         | Description                                                      | Locks required? |
 | ------------ | ---------------------------------------------------------------- | --------------- |
@@ -288,13 +323,13 @@ kew init                      Set up kew for a project directory
 
 ## Status line
 
-After `kew init`, Claude Code shows a live status bar:
+After `kew init`, Claude Code shows a live status bar — no configuration needed:
 
 ```
-◆ kew  ▶ 2 ⏳3 ✓15 ✗1  ctx:8 emb:42 tok:14.2k  4.1MB
+◆ kew  ▶ developer tester ⏳1 ✓15 ✗1  ctx:8 emb:42 tok:14.2k  4.1MB
 ```
 
-Running · pending · done · failed · context entries · embeddings · total tokens · DB size. Token count accumulates across all completed tasks — running cost of agent work visible at a glance.
+Running agents · pending · done · failed · context entries · embeddings · total local tokens · DB size. The token count shows work done locally that didn't cost API tokens.
 
 ---
 
@@ -351,10 +386,11 @@ Feature flags — build without optional components:
 
 ```toml
 [features]
-default = ["tui", "mcp", "vectors"]
+default = ["tui", "mcp", "vectors", "index"]
 tui     = ["dep:ratatui", "dep:crossterm"]
 mcp     = ["dep:rmcp", "dep:schemars"]
 vectors = ["dep:zerocopy"]
+index   = ["dep:notify", "dep:ignore"]
 ```
 
 ```bash
