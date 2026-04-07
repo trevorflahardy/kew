@@ -1,6 +1,7 @@
 /target
 .kew/
 agents/
+.agents/
 
 # Rust related
 /target
