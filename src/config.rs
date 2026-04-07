@@ -29,7 +29,6 @@ pub struct DefaultsConfig {
     pub timeout: Option<String>,
 }
 
-
 /// `ollama:` block — Ollama connection settings.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -40,7 +39,6 @@ pub struct OllamaConfig {
     /// Model used for generating embeddings.
     pub embedding_model: Option<String>,
 }
-
 
 impl KewConfig {
     /// Load config from `kew_config.yaml` in `project_dir`.
