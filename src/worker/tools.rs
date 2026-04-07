@@ -411,7 +411,7 @@ impl ToolSandbox {
             .min(GREP_MAX_RESULTS);
 
         let mut matches = Vec::new();
-        walk_files(&search_root, &self.project_root, &mut |path| {
+        let mut walk_fn = |path: &Path| {
             if matches.len() >= max {
                 return;
             }
@@ -447,7 +447,13 @@ impl ToolSandbox {
                     ));
                 }
             }
-        });
+        };
+
+        if search_root.is_file() {
+            walk_fn(&search_root);
+        } else {
+            walk_files(&search_root, &self.project_root, &mut walk_fn);
+        }
 
         if matches.is_empty() {
             format!("no matches found for pattern '{}'", params.pattern)
