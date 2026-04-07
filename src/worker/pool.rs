@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info};
 
 use crate::db::models::Task;
@@ -147,6 +147,76 @@ impl Pool {
 
         info!(count = results.len(), "all tasks completed");
         Ok(results)
+    }
+}
+
+/// A long-lived worker pool for the MCP server.
+///
+/// Unlike [`Pool`], `SharedPool` is started once and kept alive for the lifetime
+/// of the server. Multiple callers can submit tasks concurrently — each gets back
+/// its own result via a dedicated oneshot channel, so concurrent `kew_run` calls
+/// from Claude actually execute in parallel across the pool's workers.
+pub struct SharedPool {
+    task_tx: mpsc::Sender<(Task, oneshot::Sender<WorkResult>)>,
+}
+
+impl SharedPool {
+    /// Start a shared pool with `size` concurrent workers.
+    /// Workers run as background tokio tasks and live until the pool is dropped.
+    pub fn start(
+        db: Database,
+        ollama: Arc<dyn LlmClient>,
+        claude: Option<Arc<dyn LlmClient>>,
+        size: usize,
+    ) -> Self {
+        let (task_tx, task_rx) =
+            mpsc::channel::<(Task, oneshot::Sender<WorkResult>)>(size * 16);
+        let task_rx = Arc::new(tokio::sync::Mutex::new(task_rx));
+
+        for i in 0..size {
+            let worker_id = format!("worker-{i}");
+            let db = db.clone();
+            let ollama = ollama.clone();
+            let claude = claude.clone();
+            let task_rx = task_rx.clone();
+
+            tokio::spawn(async move {
+                let worker = Worker::new(worker_id.clone(), db, ollama, claude);
+                debug!(worker = %worker_id, "shared worker started");
+
+                loop {
+                    let item = {
+                        let mut rx = task_rx.lock().await;
+                        rx.recv().await
+                    };
+                    match item {
+                        Some((task, reply_tx)) => {
+                            let result = worker.execute(&task).await;
+                            let _ = reply_tx.send(result); // ignore if caller dropped
+                        }
+                        None => break, // pool dropped — shut down
+                    }
+                }
+
+                debug!(worker = %worker_id, "shared worker stopped");
+            });
+        }
+
+        info!(workers = size, "shared pool started");
+        Self { task_tx }
+    }
+
+    /// Submit a task and await its result.
+    /// Returns an error only if the pool has shut down.
+    pub async fn submit(&self, task: Task) -> anyhow::Result<WorkResult> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.task_tx
+            .send((task, reply_tx))
+            .await
+            .map_err(|_| anyhow::anyhow!("shared pool channel closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("worker dropped reply before sending result"))
     }
 }
 

@@ -16,25 +16,29 @@ use serde::{Deserialize, Serialize};
 use crate::db::{self, Database};
 use crate::llm::ollama::OllamaClient;
 use crate::llm::LlmClient;
+use crate::worker::pool::SharedPool;
 
 /// The kew MCP server.
-#[allow(dead_code)]
 pub struct KewMcpServer {
     db: Database,
     ollama: Arc<dyn LlmClient>,
     ollama_url: String,
     tool_router: ToolRouter<Self>,
+    /// Persistent worker pool shared across all concurrent `kew_run` calls.
+    pool: Arc<SharedPool>,
 }
 
 impl KewMcpServer {
     pub fn new(db: Database, ollama_url: &str) -> Self {
         let ollama: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(ollama_url));
         let tool_router = Self::tool_router();
+        let pool = Arc::new(SharedPool::start(db.clone(), ollama.clone(), None, 4));
         Self {
             db,
             ollama,
             ollama_url: ollama_url.to_string(),
             tool_router,
+            pool,
         }
     }
 }
@@ -350,13 +354,7 @@ impl KewMcpServer {
                 .expect("just-created task should be claimable")
         };
 
-        let mut pool =
-            crate::worker::pool::Pool::new(self.db.clone(), self.ollama.clone(), None, 1);
-        let results = pool
-            .submit_all_and_wait(vec![task])
-            .await
-            .expect("pool start failed");
-        let work_result = results.into_iter().next().expect("submitted 1 task");
+        let work_result = self.pool.submit(task).await.expect("pool submit failed");
 
         Json(RunResult {
             task_id: work_result.task_id,
@@ -634,24 +632,26 @@ mod tests {
             response: response.into(),
         });
         let tool_router = KewMcpServer::tool_router();
+        let pool = Arc::new(SharedPool::start(db.clone(), ollama.clone(), None, 2));
         KewMcpServer {
             db,
             ollama,
             ollama_url: "http://mock:11434".into(),
             tool_router,
+            pool,
         }
     }
 
-    #[test]
-    fn test_server_get_info() {
+    #[tokio::test]
+    async fn test_server_get_info() {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "hi");
         let info = server.get_info();
         assert!(info.instructions.unwrap().contains("kew_run"));
     }
 
-    #[test]
-    fn test_tool_router_lists_all_tools() {
+    #[tokio::test]
+    async fn test_tool_router_lists_all_tools() {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "hi");
         let tools = server.tool_router.list_all();
@@ -679,8 +679,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_tool_schemas_have_descriptions() {
+    #[tokio::test]
+    async fn test_tool_schemas_have_descriptions() {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "hi");
         let tools = server.tool_router.list_all();
@@ -694,8 +694,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_kew_run_input_schema_requires_prompt() {
+    #[tokio::test]
+    async fn test_kew_run_input_schema_requires_prompt() {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "hi");
         let tools = server.tool_router.list_all();
@@ -921,8 +921,8 @@ mod tests {
         assert_eq!(result.status, "done");
     }
 
-    #[test]
-    fn test_kew_list_agents_returns_all_builtins() {
+    #[tokio::test]
+    async fn test_kew_list_agents_returns_all_builtins() {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "");
         let Json(result) = server.list_agents(Parameters(ListAgentsParams {}));
