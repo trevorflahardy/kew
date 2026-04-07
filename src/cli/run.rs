@@ -138,86 +138,6 @@ impl RunArgs {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_args(prompt: Option<&str>, timeout: &str) -> RunArgs {
-        RunArgs {
-            prompt: prompt.map(String::from),
-            model: "gemma4:26b".into(),
-            wait: false,
-            system: None,
-            file: None,
-            context: vec![],
-            share_as: None,
-            lock: vec![],
-            workers: 4,
-            timeout: timeout.into(),
-            json: false,
-            quiet: false,
-            agent: None,
-        }
-    }
-
-    #[test]
-    fn test_parse_timeout_minutes() {
-        let args = make_args(None, "5m");
-        assert_eq!(args.parse_timeout(), Duration::from_secs(300));
-    }
-
-    #[test]
-    fn test_parse_timeout_seconds() {
-        let args = make_args(None, "120s");
-        assert_eq!(args.parse_timeout(), Duration::from_secs(120));
-    }
-
-    #[test]
-    fn test_parse_timeout_hours() {
-        let args = make_args(None, "2h");
-        assert_eq!(args.parse_timeout(), Duration::from_secs(7200));
-    }
-
-    #[test]
-    fn test_parse_timeout_default() {
-        let args = make_args(None, "garbage");
-        assert_eq!(args.parse_timeout(), Duration::from_secs(300));
-    }
-
-    #[test]
-    fn test_resolve_prompt_from_arg() {
-        let args = make_args(Some("hello world"), "5m");
-        assert_eq!(args.resolve_prompt().unwrap(), "hello world");
-    }
-
-    #[test]
-    fn test_resolve_prompt_from_file() {
-        // Write the file inside cwd so the path-traversal check passes.
-        let cwd = std::env::current_dir().unwrap();
-        let file_path = cwd.join("_test_prompt_tmp.txt");
-        std::fs::write(&file_path, "file prompt content").unwrap();
-        let mut args = make_args(None, "5m");
-        args.file = Some(file_path.clone());
-        let result = args.resolve_prompt().unwrap();
-        std::fs::remove_file(&file_path).ok();
-        assert_eq!(result, "file prompt content");
-    }
-
-    #[test]
-    fn test_resolve_prompt_arg_takes_precedence_over_file() {
-        let mut args = make_args(Some("from arg"), "5m");
-        args.file = Some(std::path::PathBuf::from("/nonexistent"));
-        assert_eq!(args.resolve_prompt().unwrap(), "from arg");
-    }
-
-    #[test]
-    fn test_resolve_prompt_missing_file_errors() {
-        let mut args = make_args(None, "5m");
-        args.file = Some(std::path::PathBuf::from("/nonexistent/path/prompt.txt"));
-        assert!(args.resolve_prompt().is_err());
-    }
-}
-
 /// Execute the `kew run` command.
 pub async fn execute(
     args: &RunArgs,
@@ -367,4 +287,83 @@ pub async fn execute(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_args(prompt: Option<&str>, timeout: &str) -> RunArgs {
+        RunArgs {
+            prompt: prompt.map(String::from),
+            model: "gemma4:26b".into(),
+            wait: false,
+            system: None,
+            file: None,
+            context: vec![],
+            share_as: None,
+            lock: vec![],
+            workers: 4,
+            timeout: timeout.into(),
+            json: false,
+            quiet: false,
+            agent: None,
+        }
+    }
+
+    #[test]
+    fn test_parse_timeout_minutes() {
+        let args = make_args(None, "5m");
+        assert_eq!(args.parse_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_parse_timeout_seconds() {
+        let args = make_args(None, "120s");
+        assert_eq!(args.parse_timeout(), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn test_parse_timeout_hours() {
+        let args = make_args(None, "2h");
+        assert_eq!(args.parse_timeout(), Duration::from_secs(7200));
+    }
+
+    #[test]
+    fn test_parse_timeout_default() {
+        let args = make_args(None, "garbage");
+        assert_eq!(args.parse_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_resolve_prompt_from_arg() {
+        let args = make_args(Some("hello world"), "5m");
+        assert_eq!(args.resolve_prompt().unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_resolve_prompt_from_file() {
+        let cwd = std::env::current_dir().unwrap();
+        let file_path = cwd.join("_test_prompt_tmp.txt");
+        std::fs::write(&file_path, "file prompt content").unwrap();
+        let mut args = make_args(None, "5m");
+        args.file = Some(file_path.clone());
+        let result = args.resolve_prompt().unwrap();
+        std::fs::remove_file(&file_path).ok();
+        assert_eq!(result, "file prompt content");
+    }
+
+    #[test]
+    fn test_resolve_prompt_arg_takes_precedence_over_file() {
+        let mut args = make_args(Some("from arg"), "5m");
+        args.file = Some(std::path::PathBuf::from("/nonexistent"));
+        assert_eq!(args.resolve_prompt().unwrap(), "from arg");
+    }
+
+    #[test]
+    fn test_resolve_prompt_missing_file_errors() {
+        let mut args = make_args(None, "5m");
+        args.file = Some(std::path::PathBuf::from("/nonexistent/path/prompt.txt"));
+        assert!(args.resolve_prompt().is_err());
+    }
 }

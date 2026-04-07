@@ -355,120 +355,6 @@ fn append_gitignore(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_append_gitignore_creates_new() {
-        let dir = tempdir().unwrap();
-        append_gitignore(dir.path()).unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert!(content.contains(".kew/"));
-    }
-
-    #[test]
-    fn test_append_gitignore_appends_to_existing() {
-        let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join(".gitignore"), "node_modules/\n").unwrap();
-        append_gitignore(dir.path()).unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert!(content.contains("node_modules/"));
-        assert!(content.contains(".kew/"));
-    }
-
-    #[test]
-    fn test_append_gitignore_no_duplicate() {
-        let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join(".gitignore"), ".kew/\n").unwrap();
-        append_gitignore(dir.path()).unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert_eq!(content.matches(".kew/").count(), 1);
-    }
-
-    #[test]
-    fn test_inject_mcp_config_creates_fresh() {
-        let dir = tempdir().unwrap();
-        inject_mcp_config(dir.path()).unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
-        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert!(json["mcpServers"]["kew"].is_object());
-        assert_eq!(json["mcpServers"]["kew"]["command"], "kew");
-        assert_eq!(json["mcpServers"]["kew"]["args"][3], "./.kew/kew.db");
-    }
-
-    #[test]
-    fn test_inject_mcp_config_preserves_existing() {
-        let dir = tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".mcp.json"),
-            r#"{"mcpServers":{"other":{"command":"other"}}}"#,
-        )
-        .unwrap();
-
-        inject_mcp_config(dir.path()).unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
-        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert!(json["mcpServers"]["other"].is_object());
-        assert!(json["mcpServers"]["kew"].is_object());
-    }
-
-    #[test]
-    fn test_inject_statusline_writes_script_and_settings() {
-        let dir = tempdir().unwrap();
-        inject_statusline_config(dir.path()).unwrap();
-
-        // Script exists and contains the sentinel comment
-        let script = std::fs::read_to_string(dir.path().join(".claude/kew-statusline.sh")).unwrap();
-        assert!(script.contains("kew init"));
-        assert!(script.contains("kew --db"));
-
-        // settings.local.json has the statusLine key
-        let content =
-            std::fs::read_to_string(dir.path().join(".claude/settings.local.json")).unwrap();
-        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(json["statusLine"]["type"], "command");
-        assert!(json["statusLine"]["command"]
-            .as_str()
-            .unwrap()
-            .contains("kew-statusline.sh"));
-    }
-
-    #[test]
-    fn test_inject_statusline_preserves_existing_settings() {
-        let dir = tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        std::fs::create_dir_all(&claude_dir).unwrap();
-        std::fs::write(
-            claude_dir.join("settings.local.json"),
-            r#"{"mcpServers":{"kew":{"command":"kew"}}}"#,
-        )
-        .unwrap();
-
-        inject_statusline_config(dir.path()).unwrap();
-
-        let content = std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap();
-        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-        // Existing MCP config preserved
-        assert!(json["mcpServers"]["kew"].is_object());
-        // New statusLine added
-        assert_eq!(json["statusLine"]["type"], "command");
-    }
-
-    #[test]
-    fn test_config_template_substitution() {
-        let config = KEW_CONFIG_TEMPLATE.replace("{model}", "gemma4:26b");
-        assert!(config.contains("model: gemma4:26b"));
-        assert!(!config.contains("{model}"));
-    }
-}
-
 /// Shell script written to .claude/kew-statusline.sh on `kew init`.
 /// Uses Claude Code's stdin JSON to find the project DB — no hardcoded paths.
 const STATUSLINE_SCRIPT: &str = r#"#!/bin/sh
@@ -626,4 +512,114 @@ fn inject_mcp_config(project_dir: &Path) -> Result<()> {
     println!("\u{2713} Wrote kew MCP server config to .mcp.json");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_append_gitignore_creates_new() {
+        let dir = tempdir().unwrap();
+        append_gitignore(dir.path()).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(content.contains(".kew/"));
+    }
+
+    #[test]
+    fn test_append_gitignore_appends_to_existing() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "node_modules/\n").unwrap();
+        append_gitignore(dir.path()).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(content.contains("node_modules/"));
+        assert!(content.contains(".kew/"));
+    }
+
+    #[test]
+    fn test_append_gitignore_no_duplicate() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), ".kew/\n").unwrap();
+        append_gitignore(dir.path()).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(content.matches(".kew/").count(), 1);
+    }
+
+    #[test]
+    fn test_inject_mcp_config_creates_fresh() {
+        let dir = tempdir().unwrap();
+        inject_mcp_config(dir.path()).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(json["mcpServers"]["kew"].is_object());
+        assert_eq!(json["mcpServers"]["kew"]["command"], "kew");
+        assert_eq!(json["mcpServers"]["kew"]["args"][3], "./.kew/kew.db");
+    }
+
+    #[test]
+    fn test_inject_mcp_config_preserves_existing() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"other":{"command":"other"}}}"#,
+        )
+        .unwrap();
+
+        inject_mcp_config(dir.path()).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(json["mcpServers"]["other"].is_object());
+        assert!(json["mcpServers"]["kew"].is_object());
+    }
+
+    #[test]
+    fn test_inject_statusline_writes_script_and_settings() {
+        let dir = tempdir().unwrap();
+        inject_statusline_config(dir.path()).unwrap();
+
+        let script = std::fs::read_to_string(dir.path().join(".claude/kew-statusline.sh")).unwrap();
+        assert!(script.contains("kew init"));
+        assert!(script.contains("kew --db"));
+
+        let content =
+            std::fs::read_to_string(dir.path().join(".claude/settings.local.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["statusLine"]["type"], "command");
+        assert!(json["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("kew-statusline.sh"));
+    }
+
+    #[test]
+    fn test_inject_statusline_preserves_existing_settings() {
+        let dir = tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            r#"{"mcpServers":{"kew":{"command":"kew"}}}"#,
+        )
+        .unwrap();
+
+        inject_statusline_config(dir.path()).unwrap();
+
+        let content = std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(json["mcpServers"]["kew"].is_object());
+        assert_eq!(json["statusLine"]["type"], "command");
+    }
+
+    #[test]
+    fn test_config_template_substitution() {
+        let config = KEW_CONFIG_TEMPLATE.replace("{model}", "gemma4:26b");
+        assert!(config.contains("model: gemma4:26b"));
+        assert!(!config.contains("{model}"));
+    }
 }

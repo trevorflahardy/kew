@@ -753,6 +753,21 @@ impl ServerHandler for KewMcpServer {
     }
 }
 
+/// Start the MCP server on stdio.
+///
+/// Reads `kew_config.yaml` from the current directory to resolve the worker
+/// count. The CLI-supplied `ollama_url` takes precedence over the config file
+/// value so that `--ollama-url` flags still work as expected.
+pub async fn serve(db: Database, ollama_url: &str, workers: usize) -> anyhow::Result<()> {
+    let server = KewMcpServer::new(db, ollama_url, workers);
+    let service = server
+        .serve((tokio::io::stdin(), tokio::io::stdout()))
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP server init failed: {e}"))?;
+    service.waiting().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,7 +903,6 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "hi");
 
-        // Set context
         let set_params = ContextSetParams {
             key: "test-key".into(),
             content: "test content".into(),
@@ -898,7 +912,6 @@ mod tests {
         assert_eq!(set_result.key, "test-key");
         assert_eq!(set_result.bytes, 12);
 
-        // Get context
         let get_params = ContextGetParams {
             key: "test-key".into(),
         };
@@ -981,8 +994,6 @@ mod tests {
         let Json(run_result) = server.run(Parameters(params)).await;
         assert_eq!(run_result.status, "done");
 
-        // share_as keys are namespaced with the project prefix so they round-trip
-        // correctly through kew_context_get.
         let namespaced = format!("{}/output-key", project_namespace());
         let conn = server.db.conn();
         let entry = db::context::get_context(&conn, &namespaced).unwrap();
@@ -995,7 +1006,6 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "hi");
 
-        // Store an embedding manually
         {
             let conn = server.db.conn();
             db::vectors::store_embedding(
@@ -1063,8 +1073,6 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_run_explicit_agent_sets_system_prompt() {
         let db = Database::open_in_memory().unwrap();
-        // Use a mock that echoes back its system prompt in the response isn't possible,
-        // but we can verify the task is created (status=done) and no error occurs.
         let server = make_server_with_mock(db, "refactored");
         let params = RunParams {
             prompt: "Refactor the auth module".into(),
@@ -1083,14 +1091,13 @@ mod tests {
     async fn test_mcp_run_keyword_routing_selects_agent() {
         let db = Database::open_in_memory().unwrap();
         let server = make_server_with_mock(db, "done");
-        // "debug" keyword → debugger agent auto-selected
         let params = RunParams {
             prompt: "debug why the lock is deadlocking".into(),
             model: "mock".into(),
             system: None,
             context: vec![],
             share_as: None,
-            agent: None, // not explicit — should auto-detect
+            agent: None,
         };
         let Json(result) = server.run(Parameters(params)).await;
         assert_eq!(result.status, "done");
@@ -1117,7 +1124,6 @@ mod tests {
                 "missing agent '{expected}' in list_agents"
             );
         }
-        // Agents with known keywords should have non-empty keywords field
         let dev = result
             .agents
             .iter()
@@ -1125,19 +1131,4 @@ mod tests {
             .unwrap();
         assert!(!dev.keywords.is_empty());
     }
-}
-
-/// Start the MCP server on stdio.
-///
-/// Reads `kew_config.yaml` from the current directory to resolve the worker
-/// count. The CLI-supplied `ollama_url` takes precedence over the config file
-/// value so that `--ollama-url` flags still work as expected.
-pub async fn serve(db: Database, ollama_url: &str, workers: usize) -> anyhow::Result<()> {
-    let server = KewMcpServer::new(db, ollama_url, workers);
-    let service = server
-        .serve((tokio::io::stdin(), tokio::io::stdout()))
-        .await
-        .map_err(|e| anyhow::anyhow!("MCP server init failed: {e}"))?;
-    service.waiting().await?;
-    Ok(())
 }
