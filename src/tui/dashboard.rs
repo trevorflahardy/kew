@@ -196,7 +196,7 @@ impl App {
 
     /// Returns true if the selected task is cancellable.
     fn can_cancel(&self) -> bool {
-        self.detail.as_ref().map_or(false, |d| {
+        self.detail.as_ref().is_some_and(|d| {
             matches!(d.status.as_str(), "pending" | "assigned" | "running")
         })
     }

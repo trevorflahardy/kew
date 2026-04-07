@@ -45,7 +45,7 @@ fn list_agents() -> Result<()> {
     let agents = agents::list_agents(project_dir.as_deref());
 
     println!("Available agents:\n");
-    println!("  {:<15} {:<10} {}", "NAME", "SOURCE", "DESCRIPTION");
+    println!("  {:<15} {:<10} DESCRIPTION", "NAME", "SOURCE");
     println!("  {}", "-".repeat(72));
 
     for entry in &agents {

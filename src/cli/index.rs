@@ -176,7 +176,7 @@ async fn index_file(
         .context("store embedding failed")?;
 
     // Store content in context table for retrieval
-    let rel = path.strip_prefix(root).unwrap_or(path);
+    let _rel = path.strip_prefix(root).unwrap_or(path);
     db::context::put_context(&conn, key, "file", &content, None).context("store context failed")?;
 
     drop(conn);

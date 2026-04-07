@@ -19,6 +19,7 @@ pub struct KewConfig {
 /// `defaults:` block — task execution defaults.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct DefaultsConfig {
     /// Default model name (e.g. "gemma4:26b").
     pub model: Option<String>,
@@ -28,19 +29,11 @@ pub struct DefaultsConfig {
     pub timeout: Option<String>,
 }
 
-impl Default for DefaultsConfig {
-    fn default() -> Self {
-        Self {
-            model: None,
-            workers: None,
-            timeout: None,
-        }
-    }
-}
 
 /// `ollama:` block — Ollama connection settings.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct OllamaConfig {
     /// Ollama base URL (e.g. "http://localhost:11434").
     pub url: Option<String>,
@@ -48,14 +41,6 @@ pub struct OllamaConfig {
     pub embedding_model: Option<String>,
 }
 
-impl Default for OllamaConfig {
-    fn default() -> Self {
-        Self {
-            url: None,
-            embedding_model: None,
-        }
-    }
-}
 
 impl KewConfig {
     /// Load config from `kew_config.yaml` in `project_dir`.
