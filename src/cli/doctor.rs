@@ -26,7 +26,7 @@ pub async fn execute(ollama_url: &str, db_path: &str) -> Result<()> {
             match client.list_models().await {
                 Ok(models) => {
                     if models.is_empty() {
-                        println!("  \u{26a0} No models found. Run: ollama pull gemma3:27b");
+                        println!("  \u{26a0} No models found. Run: ollama pull gemma4:26b");
                         all_ok = false;
                     } else {
                         println!("\u{2713} {} model(s) available:", models.len());

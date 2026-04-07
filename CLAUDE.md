@@ -17,15 +17,15 @@ For any task with 2+ independent parts, launch all in parallel with `kew_run` in
 
 kew registers itself as an MCP server on `kew init`. Use these directly:
 
-| Tool                 | What it does                                                           |
-| -------------------- | ---------------------------------------------------------------------- |
-| `kew_run`            | Dispatch a task to a specialist agent; blocks and returns the result   |
-| `kew_list_agents`    | List all agents with trigger keywords                                  |
-| `kew_context_set`    | Store text under a key for later tasks to load                         |
-| `kew_context_get`    | Retrieve stored text by key                                            |
-| `kew_context_search` | Semantic search over stored context (vector similarity)                |
-| `kew_status`         | Pending/running/done task counts and DB stats                          |
-| `kew_doctor`         | Check Ollama connectivity and available models                         |
+| Tool                 | What it does                                                         |
+| -------------------- | -------------------------------------------------------------------- |
+| `kew_run`            | Dispatch a task to a specialist agent; blocks and returns the result |
+| `kew_list_agents`    | List all agents with trigger keywords                                |
+| `kew_context_set`    | Store text under a key for later tasks to load                       |
+| `kew_context_get`    | Retrieve stored text by key                                          |
+| `kew_context_search` | Semantic search over stored context (vector similarity)              |
+| `kew_status`         | Pending/running/done task counts and DB stats                        |
+| `kew_doctor`         | Check Ollama connectivity and available models                       |
 
 ## Persistent Worker Pool
 
@@ -49,16 +49,16 @@ Pass `agent` explicitly, or omit it and let keyword routing pick the right speci
 { "prompt": "Debug why the lock is deadlocking in pool.rs" }
 ```
 
-| Agent          | Role                                 | Trigger keywords                                               |
-| -------------- | ------------------------------------ | -------------------------------------------------------------- |
-| `developer`    | Code generation & refactoring        | implement, build, write code, add feature, refactor            |
-| `debugger`     | Root cause analysis                  | debug, broken, crash, diagnose, fix the bug, why is            |
-| `tester`       | Test writing & coverage gaps         | write test, add test, unit test, test coverage, test suite     |
-| `docs-writer`  | Documentation & READMEs              | document, write docs, explain this, write readme               |
-| `doc-audit`    | Documentation quality checks         | doc audit, documentation gap, missing docs, audit doc          |
-| `security`     | Vulnerability & auth review          | security, vulnerability, injection, auth bypass, cve           |
-| `error-finder` | Pre-emptive bug detection            | find error, potential bug, what could go wrong, review for bug |
-| `watcher`      | Codebase exploration & status        | watch, summarize, what's happening, status report, observe     |
+| Agent          | Role                          | Trigger keywords                                               |
+| -------------- | ----------------------------- | -------------------------------------------------------------- |
+| `developer`    | Code generation & refactoring | implement, build, write code, add feature, refactor            |
+| `debugger`     | Root cause analysis           | debug, broken, crash, diagnose, fix the bug, why is            |
+| `tester`       | Test writing & coverage gaps  | write test, add test, unit test, test coverage, test suite     |
+| `docs-writer`  | Documentation & READMEs       | document, write docs, explain this, write readme               |
+| `doc-audit`    | Documentation quality checks  | doc audit, documentation gap, missing docs, audit doc          |
+| `security`     | Vulnerability & auth review   | security, vulnerability, injection, auth bypass, cve           |
+| `error-finder` | Pre-emptive bug detection     | find error, potential bug, what could go wrong, review for bug |
+| `watcher`      | Codebase exploration & status | watch, summarize, what's happening, status report, observe     |
 
 Run `kew agent list` or call `kew_list_agents` to see agents including project-local overrides.
 
@@ -147,8 +147,8 @@ Results from `--share-as` land in the same store. Always retrieve with `kew_cont
 
 Even when working alone, launch background checks before closing any task. Fire-and-forget; check at the end.
 
-| When you…                    | Fire in background                                                                  |
-| ---------------------------- | ----------------------------------------------------------------------------------- |
+| When you…                    | Fire in background                                                                 |
+| ---------------------------- | ---------------------------------------------------------------------------------- |
 | Edit or write code           | `kew_run { agent: "error-finder", prompt: "Review <files> for potential bugs" }`   |
 | Touch auth / IO / user input | `kew_run { agent: "security", prompt: "Audit <files> for security issues" }`       |
 | Add a feature                | `kew_run { agent: "tester", prompt: "Identify missing test coverage in <files>" }` |
@@ -171,17 +171,17 @@ Configure tiers in `kew_config.yaml`. Agents declare a tier; never a raw model n
 
 ```yaml
 tiers:
-  fast: gemma3:27b         # summaries, routing, classification
-  code: gemma4:26b         # code generation and debugging
+  fast: gemma4:26b # summaries, routing, classification
+  code: gemma4:26b # code generation and debugging
   smart: claude-sonnet-4-6 # complex reasoning, architecture decisions
-  embed: nomic-embed-text  # embeddings only (Ollama)
+  embed: nomic-embed-text # embeddings only (Ollama)
 ```
 
 Agent YAML declares tier:
 
 ```yaml
 name: developer
-tier: code  # resolved to model at runtime via kew_config.yaml tiers
+tier: code # resolved to model at runtime via kew_config.yaml tiers
 ```
 
 ## Custom Agents

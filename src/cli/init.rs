@@ -23,7 +23,7 @@ pub struct InitArgs {
     pub no_gitignore: bool,
 
     /// Set default model in kew_config.yaml
-    #[arg(long, default_value = "gemma3:27b")]
+    #[arg(long, default_value = "gemma4:26b")]
     pub model: String,
 
     /// Overwrite existing kew_config.yaml
@@ -202,7 +202,7 @@ Configure tiers in `kew_config.yaml`. Agents declare a tier; never a raw model n
 
 ```yaml
 tiers:
-  fast: gemma3:27b         # summaries, routing, classification
+  fast: gemma4:26b         # summaries, routing, classification
   code: gemma4:26b         # code generation and debugging
   smart: claude-sonnet-4-6 # complex reasoning, architecture decisions
   embed: nomic-embed-text  # embeddings only (Ollama)
@@ -251,7 +251,7 @@ ollama:
 
 # Model aliases
 aliases:
-  fast: gemma3:27b
+  fast: gemma4:26b
   # smart: claude-sonnet-4-20250514
   # code: codellama
 

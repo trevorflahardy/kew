@@ -66,7 +66,7 @@ cargo install --path .
 
 ```bash
 # 1. Install Ollama and pull a model
-ollama pull gemma3:27b
+ollama pull gemma4:26b
 
 # 2. Set up your project — this is the only setup step
 kew init
@@ -88,7 +88,7 @@ You can also use kew directly from the CLI:
 
 ```bash
 # Run a task locally and wait for output
-kew run -m gemma3:27b -w "Write a prime checker in Python"
+kew run -m gemma4:26b -w "Write a prime checker in Python"
 
 # Use Claude API instead (models starting with claude- route automatically)
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -136,14 +136,14 @@ Each task follows this path:
 
 Workers are tokio tasks in a pool (default: 4 concurrent), not OS processes. No IPC overhead.
 
-| State      | Meaning                              |
-| ---------- | ------------------------------------ |
-| `pending`  | Queued, waiting for a worker         |
-| `assigned` | Claimed by a worker                  |
-| `running`  | LLM call in flight                   |
-| `done`     | Completed successfully               |
-| `failed`   | LLM error or timeout                 |
-| `cancelled`| Cancelled before pickup              |
+| State       | Meaning                      |
+| ----------- | ---------------------------- |
+| `pending`   | Queued, waiting for a worker |
+| `assigned`  | Claimed by a worker          |
+| `running`   | LLM call in flight           |
+| `done`      | Completed successfully       |
+| `failed`    | LLM error or timeout         |
+| `cancelled` | Cancelled before pickup      |
 
 </details>
 
@@ -152,12 +152,12 @@ Workers are tokio tasks in a pool (default: 4 concurrent), not OS processes. No 
 
 One file: `.kew/kew.db`. WAL mode, survives crashes, readable with `sqlite3`.
 
-| Table         | Purpose                                                             |
-| ------------- | ------------------------------------------------------------------- |
-| `tasks`       | Work queue with atomic claiming                                     |
-| `context`     | Key-value store for inter-agent knowledge sharing                   |
-| `file_locks`  | TTL-based locks preventing concurrent file edits                    |
-| `embeddings`  | 768-dim float vectors (cosine similarity computed in Rust)          |
+| Table        | Purpose                                                    |
+| ------------ | ---------------------------------------------------------- |
+| `tasks`      | Work queue with atomic claiming                            |
+| `context`    | Key-value store for inter-agent knowledge sharing          |
+| `file_locks` | TTL-based locks preventing concurrent file edits           |
+| `embeddings` | 768-dim float vectors (cosine similarity computed in Rust) |
 
 No external vector database. Embeddings are SQLite BLOBs; similarity is a tight Rust loop over `f32` arrays.
 
@@ -171,7 +171,7 @@ Every completed task result is embedded. New tasks with `--auto-context` search 
 ```bash
 kew context set "auth-design" "We use JWT tokens with 15-minute expiry..."
 kew context search "how does authentication work?" --top-k 5
-kew run -m gemma3:27b -w "Refactor the auth middleware" --auto-context
+kew run -m gemma4:26b -w "Refactor the auth middleware" --auto-context
 ```
 
 The MCP tool `kew_context_search` exposes this to Claude Code directly — no CLI needed.
@@ -184,16 +184,16 @@ The MCP tool `kew_context_search` exposes this to Claude Code directly — no CL
 
 Eight built-in agents, YAML configs compiled into the binary:
 
-| Agent          | Role                           | Auto-trigger keywords                                            |
-| -------------- | ------------------------------ | ---------------------------------------------------------------- |
-| `developer`    | Production code writer         | implement, build this, write code, add feature, refactor        |
-| `debugger`     | Systematic root-cause analysis | debug, broken, not working, crash, root cause, diagnose         |
-| `docs-writer`  | Documentation                  | document, write docs, add docs, explain this, write readme      |
-| `security`     | Vulnerability auditor          | security, vulnerability, exploit, injection, auth bypass, cve   |
-| `doc-audit`    | Documentation gap finder       | doc audit, documentation gap, missing docs, audit doc           |
-| `tester`       | Test suite writer              | write test, add test, unit test, test coverage, test suite      |
-| `watcher`      | Progress tracker               | watch, track progress, what's happening, status report          |
-| `error-finder` | Adversarial bug detector       | find error, potential bug, what could go wrong, review for bug  |
+| Agent          | Role                           | Auto-trigger keywords                                          |
+| -------------- | ------------------------------ | -------------------------------------------------------------- |
+| `developer`    | Production code writer         | implement, build this, write code, add feature, refactor       |
+| `debugger`     | Systematic root-cause analysis | debug, broken, not working, crash, root cause, diagnose        |
+| `docs-writer`  | Documentation                  | document, write docs, add docs, explain this, write readme     |
+| `security`     | Vulnerability auditor          | security, vulnerability, exploit, injection, auth bypass, cve  |
+| `doc-audit`    | Documentation gap finder       | doc audit, documentation gap, missing docs, audit doc          |
+| `tester`       | Test suite writer              | write test, add test, unit test, test coverage, test suite     |
+| `watcher`      | Progress tracker               | watch, track progress, what's happening, status report         |
+| `error-finder` | Adversarial bug detector       | find error, potential bug, what could go wrong, review for bug |
 
 Override or add agents by dropping YAML files in `.kew/agents/<name>.yaml` (project-local) or `~/.config/kew/agents/<name>.yaml` (user-global). Project-local agents take precedence over built-ins with the same name.
 
@@ -212,12 +212,12 @@ system_prompt: |
 
 This is what separates kew from prompt wrappers. Agents don't just receive a prompt and return text — they run a **multi-turn tool loop** where the LLM can explore your codebase mid-generation. An agent asked to "refactor the auth module" will read the files, grep for usage patterns, understand the structure, and then write the refactored code — all autonomously.
 
-| Tool         | Description                                                      | Locks required? |
-| ------------ | ---------------------------------------------------------------- | --------------- |
-| `read_file`  | Read a file with optional line range (100 KB cap, line numbers)  | No              |
-| `list_dir`   | List directory contents with types and sizes                     | No              |
-| `grep`       | Regex search across files with optional glob filter              | No              |
-| `write_file` | Write/overwrite a file (creates parent dirs, 1 MB cap)           | Advisory check  |
+| Tool         | Description                                                     | Locks required? |
+| ------------ | --------------------------------------------------------------- | --------------- |
+| `read_file`  | Read a file with optional line range (100 KB cap, line numbers) | No              |
+| `list_dir`   | List directory contents with types and sizes                    | No              |
+| `grep`       | Regex search across files with optional glob filter             | No              |
+| `write_file` | Write/overwrite a file (creates parent dirs, 1 MB cap)          | Advisory check  |
 
 ### How it works
 
@@ -264,15 +264,15 @@ kew exposes all tools over stdio MCP. After `kew init`, `.mcp.json` is written a
 }
 ```
 
-| Tool                 | Description                                                      |
-| -------------------- | ---------------------------------------------------------------- |
-| `kew_run`            | Execute a prompt through any agent; blocks and returns result    |
-| `kew_context_get`    | Read a shared context entry by key                               |
-| `kew_context_set`    | Write a shared context entry                                     |
-| `kew_context_search` | Vector similarity search over stored knowledge                   |
-| `kew_status`         | Task counts, context entries, embedding stats                    |
-| `kew_doctor`         | Health check — Ollama reachable, models available, DB ok         |
-| `kew_list_agents`    | List available agents with keyword hints                         |
+| Tool                 | Description                                                   |
+| -------------------- | ------------------------------------------------------------- |
+| `kew_run`            | Execute a prompt through any agent; blocks and returns result |
+| `kew_context_get`    | Read a shared context entry by key                            |
+| `kew_context_set`    | Write a shared context entry                                  |
+| `kew_context_search` | Vector similarity search over stored knowledge                |
+| `kew_status`         | Task counts, context entries, embedding stats                 |
+| `kew_doctor`         | Health check — Ollama reachable, models available, DB ok      |
+| `kew_list_agents`    | List available agents with keyword hints                      |
 
 `kew_run` auto-detects the right agent from prompt keywords if you don't specify one explicitly.
 
@@ -284,7 +284,7 @@ Sequential execution where each step's output feeds into the next:
 
 ```bash
 kew chain \
-  --step "Analyze the current auth module:gemma3:27b" \
+  --step "Analyze the current auth module:gemma4:26b" \
   --step "Write a refactoring plan:claude-sonnet-4-6" \
   --step "Generate the refactored code:claude-sonnet-4-6"
 ```
@@ -300,7 +300,7 @@ Each step's result is stored as `{chain_id}-step-{N}` and loaded by the followin
 
 ```
 kew run [prompt]
-    -m, --model <model>       Model name (default: gemma3:27b)
+    -m, --model <model>       Model name (default: gemma4:26b)
     -w, --wait                Block until complete, print result
     -s, --system <prompt>     System prompt
     -f, --file <path>         Read prompt from file
@@ -336,12 +336,12 @@ kew init                      Set up kew for a project directory
 
 **Output modes for `kew run`:**
 
-| Mode          | Output                                                                          |
-| ------------- | ------------------------------------------------------------------------------- |
-| `--wait`      | Raw LLM output to stdout — what Claude Code reads via Bash                      |
-| `--json`      | `{ task_id, status, result, duration_ms, prompt_tokens, completion_tokens }`    |
-| `--porcelain` | Single-line `key=value` pairs for shell scripts and status bars                 |
-| default       | Spinner while running, formatted result with colors                             |
+| Mode          | Output                                                                       |
+| ------------- | ---------------------------------------------------------------------------- |
+| `--wait`      | Raw LLM output to stdout — what Claude Code reads via Bash                   |
+| `--json`      | `{ task_id, status, result, duration_ms, prompt_tokens, completion_tokens }` |
+| `--porcelain` | Single-line `key=value` pairs for shell scripts and status bars              |
+| default       | Spinner while running, formatted result with colors                          |
 
 </details>
 
@@ -365,10 +365,10 @@ Configure named tiers in `kew_config.yaml`. Agents declare a tier; you control w
 
 ```yaml
 tiers:
-  fast: gemma3:27b          # low-latency: summaries, routing, classification
-  code: gemma4:26b          # code generation and debugging
-  smart: claude-sonnet-4-6  # complex reasoning, architecture decisions
-  embed: nomic-embed-text   # embeddings only (Ollama)
+  fast: gemma4:26b # low-latency: summaries, routing, classification
+  code: gemma4:26b # code generation and debugging
+  smart: claude-sonnet-4-6 # complex reasoning, architecture decisions
+  embed: nomic-embed-text # embeddings only (Ollama)
 ```
 
 In agent YAMLs use `tier:` not a raw model name — swapping models only requires editing config, not agent files.
@@ -378,7 +378,7 @@ In agent YAMLs use `tier:` not a raw model name — swapping models only require
 ## File locking
 
 ```bash
-kew run -m gemma3:27b -w "Refactor auth" --lock src/auth.rs
+kew run -m gemma4:26b -w "Refactor auth" --lock src/auth.rs
 # Another agent trying to lock the same file fails immediately
 ```
 
