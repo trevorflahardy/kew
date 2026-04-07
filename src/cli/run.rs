@@ -265,7 +265,6 @@ pub async fn execute(
             context_keys: args.context.clone(),
             share_as: args.share_as.clone(),
             files_locked: args.lock.clone(),
-            files_to_read: vec![],
             parent_id: None,
             chain_id: None,
             chain_index: None,

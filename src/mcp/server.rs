@@ -156,10 +156,6 @@ struct RunParams {
     /// Context keys to load before executing (exact string keys from kew_context_set/kew_run share_as)
     #[serde(default)]
     context: Vec<String>,
-    /// File paths (relative to project root) to auto-read and inject as context before the prompt.
-    /// Max 10 files, 100 KB each. Paths escaping the project root are silently skipped.
-    #[serde(default)]
-    files: Vec<String>,
     /// Store result as this context key
     share_as: Option<String>,
     /// Named agent to use. Sets the system prompt automatically.
@@ -266,24 +262,6 @@ struct ContextSearchResult {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-struct ReadFileParams {
-    /// Path to read — absolute or relative to the project root
-    path: String,
-    /// Optional start line (1-indexed, inclusive)
-    start_line: Option<usize>,
-    /// Optional end line (1-indexed, inclusive)
-    end_line: Option<usize>,
-}
-
-#[derive(Serialize, schemars::JsonSchema)]
-struct ReadFileResult {
-    path: String,
-    content: String,
-    total_lines: usize,
-    truncated: bool,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
 struct StatusParams {}
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -353,7 +331,6 @@ impl KewMcpServer {
                 context_keys: params.context,
                 share_as: params.share_as,
                 files_locked: vec![],
-                files_to_read: params.files.into_iter().take(10).collect(),
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -477,85 +454,6 @@ impl KewMcpServer {
             }
             _ => Json(ContextSearchResult { results: vec![] }),
         }
-    }
-
-    #[tool(
-        name = "kew_read_file",
-        description = "Read a file from the project and return its contents. Path is relative to the project root. Optionally specify start_line/end_line (1-indexed) to read a slice. Hard cap: 200 KB / ~5000 lines. Paths that escape the project root are rejected."
-    )]
-    fn read_file(
-        &self,
-        Parameters(params): Parameters<ReadFileParams>,
-    ) -> Json<ReadFileResult> {
-        const MAX_BYTES: usize = 204_800; // 200 KB
-
-        let project_root = std::env::current_dir().unwrap_or_default();
-        let candidate = project_root.join(&params.path);
-
-        // Resolve and guard against path traversal. canonicalize() follows symlinks,
-        // so starts_with() checks the real physical path. TOCTOU between this check
-        // and read_to_string is acceptable for a local dev tool — exploitation requires
-        // write access to the project directory, at which point the attacker already
-        // has full access to its contents.
-        let abs = match candidate.canonicalize() {
-            Ok(p) => p,
-            Err(e) => {
-                return Json(ReadFileResult {
-                    path: params.path,
-                    content: format!("error: cannot resolve path: {e}"),
-                    total_lines: 0,
-                    truncated: false,
-                });
-            }
-        };
-        if !abs.starts_with(&project_root) {
-            return Json(ReadFileResult {
-                path: params.path,
-                content: "error: path escapes project root".into(),
-                total_lines: 0,
-                truncated: false,
-            });
-        }
-
-        let raw = match std::fs::read_to_string(&abs) {
-            Ok(s) => s,
-            Err(e) => {
-                return Json(ReadFileResult {
-                    path: params.path,
-                    content: format!("error: {e}"),
-                    total_lines: 0,
-                    truncated: false,
-                });
-            }
-        };
-
-        let lines: Vec<&str> = raw.lines().collect();
-        let total_lines = lines.len();
-
-        // Apply line range if specified (1-indexed)
-        let start = params.start_line.map(|n| n.saturating_sub(1)).unwrap_or(0);
-        let end = params.end_line.unwrap_or(total_lines).min(total_lines);
-        let sliced: Vec<&str> = lines.get(start..end).unwrap_or(&[]).to_vec();
-        let content_raw = sliced.join("\n");
-
-        // Apply byte cap — walk back to a char boundary to avoid splitting multi-byte UTF-8
-        let truncated = content_raw.len() > MAX_BYTES;
-        let content = if truncated {
-            let mut boundary = MAX_BYTES;
-            while boundary > 0 && !content_raw.is_char_boundary(boundary) {
-                boundary -= 1;
-            }
-            content_raw[..boundary].to_string()
-        } else {
-            content_raw
-        };
-
-        Json(ReadFileResult {
-            path: params.path,
-            content,
-            total_lines,
-            truncated,
-        })
     }
 
     #[tool(
@@ -768,8 +666,7 @@ mod tests {
         );
         assert!(names.contains(&"kew_status"), "missing kew_status");
         assert!(names.contains(&"kew_doctor"), "missing kew_doctor");
-        assert!(names.contains(&"kew_read_file"), "missing kew_read_file");
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 7);
         assert!(
             names.contains(&"kew_list_agents"),
             "missing kew_list_agents"
@@ -877,7 +774,6 @@ mod tests {
             model: "mock".into(),
             system: None,
             context: vec![],
-            files: vec![],
             share_as: None,
             agent: None,
         };
@@ -898,7 +794,6 @@ mod tests {
             model: "mock".into(),
             system: None,
             context: vec![],
-            files: vec![],
             share_as: Some("output-key".into()),
             agent: None,
         };
@@ -995,7 +890,6 @@ mod tests {
             model: "mock".into(),
             system: None,
             context: vec![],
-            files: vec![],
             share_as: None,
             agent: Some("developer".into()),
         };
@@ -1014,7 +908,6 @@ mod tests {
             model: "mock".into(),
             system: None,
             context: vec![],
-            files: vec![],
             share_as: None,
             agent: None, // not explicit — should auto-detect
         };
@@ -1050,77 +943,6 @@ mod tests {
             .find(|a| a.name == "developer")
             .unwrap();
         assert!(!dev.keywords.is_empty());
-    }
-
-    // --- kew_read_file tests ---
-
-    #[test]
-    fn test_read_file_success() {
-        let db = Database::open_in_memory().unwrap();
-        let server = make_server_with_mock(db, "");
-
-        // Cargo.toml is guaranteed to exist in the project root (cwd during tests)
-        let params = ReadFileParams {
-            path: "Cargo.toml".into(),
-            start_line: None,
-            end_line: None,
-        };
-        let Json(result) = server.read_file(Parameters(params));
-        assert!(!result.content.starts_with("error:"), "unexpected error: {}", result.content);
-        assert!(result.content.contains("[package]"));
-        assert!(result.total_lines > 0);
-        assert!(!result.truncated);
-    }
-
-    #[test]
-    fn test_read_file_path_traversal_rejected() {
-        let db = Database::open_in_memory().unwrap();
-        let server = make_server_with_mock(db, "");
-
-        let params = ReadFileParams {
-            path: "../../etc/passwd".into(),
-            start_line: None,
-            end_line: None,
-        };
-        let Json(result) = server.read_file(Parameters(params));
-        // Must not succeed — either canonicalize fails or starts_with check fires
-        assert!(
-            result.content.starts_with("error:"),
-            "path traversal should be rejected, got: {}",
-            &result.content[..result.content.len().min(120)]
-        );
-    }
-
-    #[test]
-    fn test_read_file_nonexistent_returns_error() {
-        let db = Database::open_in_memory().unwrap();
-        let server = make_server_with_mock(db, "");
-
-        let params = ReadFileParams {
-            path: "this_file_does_not_exist_xyz.rs".into(),
-            start_line: None,
-            end_line: None,
-        };
-        let Json(result) = server.read_file(Parameters(params));
-        assert!(result.content.starts_with("error:"));
-        assert_eq!(result.total_lines, 0);
-    }
-
-    #[test]
-    fn test_read_file_line_range() {
-        let db = Database::open_in_memory().unwrap();
-        let server = make_server_with_mock(db, "");
-
-        // Read only line 1 of Cargo.toml — should be "[package]"
-        let params = ReadFileParams {
-            path: "Cargo.toml".into(),
-            start_line: Some(1),
-            end_line: Some(1),
-        };
-        let Json(result) = server.read_file(Parameters(params));
-        assert!(!result.content.starts_with("error:"));
-        assert_eq!(result.content.trim(), "[package]");
-        assert!(result.total_lines > 1); // total is full file, not the slice
     }
 }
 

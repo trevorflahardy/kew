@@ -199,9 +199,7 @@ impl LlmClient for OllamaClient {
         };
 
         // Convert tools — pass None if empty to avoid sending an empty array
-        let tools = req
-            .tools
-            .filter(|t| !t.is_empty());
+        let tools = req.tools.filter(|t| !t.is_empty());
 
         let body = OllamaChatRequest {
             model: req.model.clone(),

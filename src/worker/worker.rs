@@ -120,44 +120,6 @@ impl Worker {
             ));
         }
 
-        // Inject requested files as user messages (max 100 KB each)
-        const FILE_SIZE_LIMIT: usize = 102_400;
-        let project_root = std::env::current_dir().unwrap_or_default();
-        for rel_path in &task.files_to_read {
-            // Resolve and guard against path traversal
-            let candidate = project_root.join(rel_path);
-            let Ok(abs) = candidate.canonicalize() else {
-                warn!("files_to_read: cannot resolve '{rel_path}', skipping");
-                continue;
-            };
-            if !abs.starts_with(&project_root) {
-                warn!("files_to_read: '{rel_path}' escapes project root, skipping");
-                continue;
-            }
-            match std::fs::read_to_string(&abs) {
-                Ok(content) => {
-                    let truncated = if content.len() > FILE_SIZE_LIMIT {
-                        warn!("files_to_read: '{rel_path}' truncated to {FILE_SIZE_LIMIT} bytes");
-                        // Walk back to a valid UTF-8 char boundary to avoid a panic
-                        let mut boundary = FILE_SIZE_LIMIT;
-                        while boundary > 0 && !content.is_char_boundary(boundary) {
-                            boundary -= 1;
-                        }
-                        &content[..boundary]
-                    } else {
-                        &content
-                    };
-                    messages.push(ChatMessage::text(
-                        "user",
-                        format!("[File: {rel_path}]\n```\n{truncated}\n```"),
-                    ));
-                }
-                Err(e) => {
-                    warn!("files_to_read: failed to read '{rel_path}': {e}");
-                }
-            }
-        }
-
         // The actual user prompt
         messages.push(ChatMessage::text("user", task.prompt.clone()));
 
@@ -192,11 +154,8 @@ impl Worker {
         }
 
         // 5. Set up tool sandbox and definitions for the agentic loop
-        let tool_sandbox = ToolSandbox::new(
-            project_root,
-            task.id.clone(),
-            self.db.clone(),
-        );
+        let project_root = std::env::current_dir().unwrap_or_default();
+        let tool_sandbox = ToolSandbox::new(project_root, task.id.clone(), self.db.clone());
         let tool_defs = ToolSandbox::definitions();
 
         // 6. AGENTIC TOOL LOOP — call LLM, execute tools, repeat
@@ -238,10 +197,7 @@ impl Worker {
                     if response.message.has_tool_calls() {
                         // Model wants to call tools — execute them and continue
                         let tool_calls = response.message.tool_calls.as_ref().unwrap();
-                        debug!(
-                            count = tool_calls.len(),
-                            iteration, "executing tool calls"
-                        );
+                        debug!(count = tool_calls.len(), iteration, "executing tool calls");
 
                         // Append the assistant's tool-call message to the conversation
                         messages.push(response.message.clone());
@@ -254,10 +210,7 @@ impl Worker {
                                 result_len = result.len(),
                                 "tool executed"
                             );
-                            messages.push(ChatMessage::tool_result(
-                                &tc.function.name,
-                                result,
-                            ));
+                            messages.push(ChatMessage::tool_result(&tc.function.name, result));
                         }
                         // Continue loop — send updated conversation back to LLM
                     } else {
@@ -510,7 +463,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -547,7 +499,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: Some("auth-analysis".into()),
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -627,7 +578,6 @@ mod tests {
                 context_keys: vec!["prior-work".into()],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -685,7 +635,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -722,7 +671,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec!["src/main.rs".into()],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -753,7 +701,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -776,7 +723,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec!["src/main.rs".into()],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -843,7 +789,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -873,7 +818,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -982,7 +926,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,
@@ -1019,121 +962,5 @@ mod tests {
         assert_eq!(cum.prompt_tokens, Some(15));
         assert_eq!(cum.completion_tokens, Some(20));
         assert_eq!(cum.duration_ms, Some(150));
-    }
-
-    // --- files_to_read injection tests ---
-
-    #[tokio::test]
-    async fn test_worker_injects_file_content() {
-        let db = Database::open_in_memory().unwrap();
-
-        struct EchoClient;
-        #[async_trait::async_trait]
-        impl LlmClient for EchoClient {
-            async fn chat(&self, req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
-                let combined = req.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n---\n");
-                Ok((ChatResponse { message: ChatMessage::text("assistant", combined), model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
-            }
-            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
-            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
-            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
-            fn provider_name(&self) -> &str { "echo" }
-        }
-
-        let worker = Worker::new("w1".into(), db.clone(), Arc::new(EchoClient), None);
-        let task = {
-            let conn = db.conn();
-            let new = crate::db::models::NewTask {
-                model: "echo".into(),
-                provider: Provider::Ollama,
-                prompt: "review it".into(),
-                system_prompt: None,
-                context_keys: vec![],
-                share_as: None,
-                files_locked: vec![],
-                files_to_read: vec!["Cargo.toml".into()],
-                parent_id: None,
-                chain_id: None,
-                chain_index: None,
-            };
-            db::tasks::create_task(&conn, &new).unwrap();
-            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
-        };
-
-        let result = worker.execute(&task).await;
-        let output = result.result.unwrap();
-        assert!(output.contains("[package]"), "Cargo.toml content missing from injected context: {output}");
-    }
-
-    #[tokio::test]
-    async fn test_worker_skips_missing_file_gracefully() {
-        let db = Database::open_in_memory().unwrap();
-        let client = mock_client("done");
-        let worker = Worker::new("w1".into(), db.clone(), client, None);
-
-        let task = {
-            let conn = db.conn();
-            let new = crate::db::models::NewTask {
-                model: "mock".into(),
-                provider: Provider::Ollama,
-                prompt: "do work".into(),
-                system_prompt: None,
-                context_keys: vec![],
-                share_as: None,
-                files_locked: vec![],
-                files_to_read: vec!["/nonexistent/path/file.rs".into()],
-                parent_id: None,
-                chain_id: None,
-                chain_index: None,
-            };
-            db::tasks::create_task(&conn, &new).unwrap();
-            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
-        };
-
-        let result = worker.execute(&task).await;
-        assert!(result.result.is_ok(), "task failed on missing file: {:?}", result.result);
-    }
-
-    #[tokio::test]
-    async fn test_worker_rejects_path_traversal_in_files_to_read() {
-        let db = Database::open_in_memory().unwrap();
-
-        struct EchoClient;
-        #[async_trait::async_trait]
-        impl LlmClient for EchoClient {
-            async fn chat(&self, req: ChatRequest) -> Result<(ChatResponse, CompletionStats), LlmError> {
-                let combined = req.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n---\n");
-                Ok((ChatResponse { message: ChatMessage::text("assistant", combined), model: "echo".into(), done: true, total_duration_ns: None, prompt_eval_count: None, eval_count: None }, CompletionStats::default()))
-            }
-            async fn embed(&self, _: &str, _: &[String]) -> Result<Vec<Vec<f32>>, LlmError> { Ok(vec![]) }
-            async fn list_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
-            async fn ping(&self) -> Result<(), LlmError> { Ok(()) }
-            fn provider_name(&self) -> &str { "echo" }
-        }
-
-        let worker = Worker::new("w1".into(), db.clone(), Arc::new(EchoClient), None);
-        let task = {
-            let conn = db.conn();
-            let new = crate::db::models::NewTask {
-                model: "echo".into(),
-                provider: Provider::Ollama,
-                prompt: "review".into(),
-                system_prompt: None,
-                context_keys: vec![],
-                share_as: None,
-                files_locked: vec![],
-                files_to_read: vec!["../../etc/passwd".into()],
-                parent_id: None,
-                chain_id: None,
-                chain_index: None,
-            };
-            db::tasks::create_task(&conn, &new).unwrap();
-            db::tasks::claim_next_pending(&conn, "w1").unwrap().unwrap()
-        };
-
-        let result = worker.execute(&task).await;
-        assert!(result.result.is_ok());
-        let output = result.result.unwrap();
-        assert!(!output.contains("root:"), "path traversal succeeded — passwd content in output");
     }
 }

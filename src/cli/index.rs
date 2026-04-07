@@ -20,8 +20,8 @@ use crate::llm::LlmClient;
 
 /// Default file extensions to index.
 const DEFAULT_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "js", "tsx", "jsx", "go", "py", "md", "toml", "yaml", "yml", "json", "sql",
-    "sh", "c", "cpp", "h",
+    "rs", "ts", "js", "tsx", "jsx", "go", "py", "md", "toml", "yaml", "yml", "json", "sql", "sh",
+    "c", "cpp", "h",
 ];
 
 /// Hard cap per file to avoid flooding the embedding model.
@@ -71,7 +71,16 @@ pub async fn execute(args: &IndexArgs, db_path: &str, ollama_url: &str) -> Resul
         extensions.join(", ")
     );
 
-    let indexed = index_directory(&root, &root, &extensions, args.force, &db, &ollama, &args.embed_model).await?;
+    let indexed = index_directory(
+        &root,
+        &root,
+        &extensions,
+        args.force,
+        &db,
+        &ollama,
+        &args.embed_model,
+    )
+    .await?;
     println!("Indexed {indexed} files.");
 
     if args.watch {
@@ -155,7 +164,10 @@ async fn index_file(
         .await
         .context("embed failed")?;
 
-    let embedding = vecs.into_iter().next().context("empty embedding response")?;
+    let embedding = vecs
+        .into_iter()
+        .next()
+        .context("empty embedding response")?;
 
     let conn = db.conn();
 
@@ -165,8 +177,7 @@ async fn index_file(
 
     // Store content in context table for retrieval
     let rel = path.strip_prefix(root).unwrap_or(path);
-    db::context::put_context(&conn, key, "file", &content, None)
-        .context("store context failed")?;
+    db::context::put_context(&conn, key, "file", &content, None).context("store context failed")?;
 
     drop(conn);
     Ok(())
@@ -177,10 +188,10 @@ fn collect_files(dir: &Path, extensions: &[String]) -> Vec<PathBuf> {
     use ignore::WalkBuilder;
 
     WalkBuilder::new(dir)
-        .hidden(false)         // include dotfiles (e.g. .env.example)
-        .git_ignore(true)      // respect .gitignore
-        .git_global(true)      // respect global gitignore
-        .ignore(true)          // respect .ignore files
+        .hidden(false) // include dotfiles (e.g. .env.example)
+        .git_ignore(true) // respect .gitignore
+        .git_global(true) // respect global gitignore
+        .ignore(true) // respect .ignore files
         .build()
         .filter_map(|entry| entry.ok())
         .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
@@ -218,10 +229,7 @@ async fn watch_directory(
     for event in rx {
         let Ok(event) = event else { continue };
 
-        let is_write = matches!(
-            event.kind,
-            EventKind::Modify(_) | EventKind::Create(_)
-        );
+        let is_write = matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_));
         if !is_write {
             continue;
         }

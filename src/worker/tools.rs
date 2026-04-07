@@ -17,8 +17,7 @@
 //!
 //! All paths are resolved relative to a `project_root` and canonicalized. Any
 //! path that escapes the project root after resolution is rejected. This is the
-//! same guard used by `files_to_read` in the worker and `kew_read_file` in the
-//! MCP server.
+//! same guard used by the worker's path resolution.
 
 use regex::Regex;
 use serde::Deserialize;
@@ -118,10 +117,11 @@ impl ToolSandbox {
                 tool_type: "function".into(),
                 function: ToolFunction {
                     name: "read_file".into(),
-                    description: "Read a file from the project. Returns the file content with \
+                    description:
+                        "Read a file from the project. Returns the file content with \
                         line numbers. Paths are relative to the project root. \
                         Max 100 KB per read. Use start_line/end_line to read slices of large files."
-                        .into(),
+                            .into(),
                     parameters: serde_json::json!({
                         "type": "object",
                         "required": ["path"],
@@ -165,10 +165,11 @@ impl ToolSandbox {
                 tool_type: "function".into(),
                 function: ToolFunction {
                     name: "grep".into(),
-                    description: "Search for a regex pattern across project files. Returns matching \
+                    description:
+                        "Search for a regex pattern across project files. Returns matching \
                         lines with file paths and line numbers. Use `path` to narrow the search \
                         scope and `glob` to filter by file extension."
-                        .into(),
+                            .into(),
                     parameters: serde_json::json!({
                         "type": "object",
                         "required": ["pattern"],
@@ -236,7 +237,9 @@ impl ToolSandbox {
             "list_dir" => self.exec_list_dir(args),
             "grep" => self.exec_grep(args),
             "write_file" => self.exec_write_file(args),
-            _ => format!("error: unknown tool '{name}'. Available: read_file, list_dir, grep, write_file"),
+            _ => format!(
+                "error: unknown tool '{name}'. Available: read_file, list_dir, grep, write_file"
+            ),
         }
     }
 
@@ -402,7 +405,10 @@ impl ToolSandbox {
         };
 
         let glob_pattern = params.glob.as_deref();
-        let max = params.max_results.unwrap_or(GREP_MAX_RESULTS).min(GREP_MAX_RESULTS);
+        let max = params
+            .max_results
+            .unwrap_or(GREP_MAX_RESULTS)
+            .min(GREP_MAX_RESULTS);
 
         let mut matches = Vec::new();
         walk_files(&search_root, &self.project_root, &mut |path| {
@@ -433,7 +439,12 @@ impl ToolSandbox {
                     break;
                 }
                 if re.is_match(line) {
-                    matches.push(format!("{}:{}: {}", rel, i + 1, line.chars().take(200).collect::<String>()));
+                    matches.push(format!(
+                        "{}:{}: {}",
+                        rel,
+                        i + 1,
+                        line.chars().take(200).collect::<String>()
+                    ));
                 }
             }
         });
@@ -474,10 +485,7 @@ impl ToolSandbox {
             let conn = self.db.conn();
             match crate::db::locks::check_lock(&conn, &params.path) {
                 Ok(Some(holder)) if holder != self.task_id => {
-                    return format!(
-                        "error: file '{}' is locked by task {holder}",
-                        params.path
-                    );
+                    return format!("error: file '{}' is locked by task {holder}", params.path);
                 }
                 Err(e) => {
                     warn!("lock check failed for '{}': {e}", params.path);
@@ -497,11 +505,7 @@ impl ToolSandbox {
         }
 
         match std::fs::write(&abs, &params.content) {
-            Ok(()) => format!(
-                "wrote {} bytes to '{}'",
-                params.content.len(),
-                params.path
-            ),
+            Ok(()) => format!("wrote {} bytes to '{}'", params.content.len(), params.path),
             Err(e) => format!("error: cannot write '{}': {e}", params.path),
         }
     }
@@ -693,10 +697,16 @@ mod tests {
     #[test]
     fn test_grep_basic() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("code.rs"), "fn main() {\n    println!(\"hello\");\n}\n")
-            .unwrap();
-        std::fs::write(dir.path().join("other.rs"), "fn other() {\n    let x = 42;\n}\n")
-            .unwrap();
+        std::fs::write(
+            dir.path().join("code.rs"),
+            "fn main() {\n    println!(\"hello\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("other.rs"),
+            "fn other() {\n    let x = 42;\n}\n",
+        )
+        .unwrap();
 
         let sandbox = test_sandbox(dir.path());
         let call = ToolCall {
@@ -820,7 +830,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,

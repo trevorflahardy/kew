@@ -206,10 +206,7 @@ fn build_claude_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<ApiMe
             });
         } else if msg.role == "tool" {
             // Tool result → buffer as tool_result block
-            let tool_use_id = format!(
-                "toolu_{}",
-                msg.tool_name.as_deref().unwrap_or("unknown")
-            );
+            let tool_use_id = format!("toolu_{}", msg.tool_name.as_deref().unwrap_or("unknown"));
             tool_result_buffer.push(ContentBlockInput::ToolResult {
                 tool_use_id,
                 content: msg.content.clone(),
@@ -242,9 +239,11 @@ impl LlmClient for ClaudeClient {
         let (system_prompt, api_messages) = build_claude_messages(&req.messages);
 
         // Convert tool definitions to Claude format
-        let tools = req.tools.as_ref().map(|defs| {
-            defs.iter().map(ClaudeTool::from).collect::<Vec<_>>()
-        }).filter(|t| !t.is_empty());
+        let tools = req
+            .tools
+            .as_ref()
+            .map(|defs| defs.iter().map(ClaudeTool::from).collect::<Vec<_>>())
+            .filter(|t| !t.is_empty());
 
         let body = MessagesRequest {
             model: req.model,
@@ -300,9 +299,7 @@ impl LlmClient for ClaudeClient {
         for block in &msg_response.content {
             match block {
                 ContentBlock::Text { text } => text_parts.push(text.as_str()),
-                ContentBlock::ToolUse {
-                    name, input, ..
-                } => {
+                ContentBlock::ToolUse { name, input, .. } => {
                     tool_calls.push(ToolCall {
                         call_type: "function".into(),
                         function: ToolCallFunction {

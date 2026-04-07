@@ -122,7 +122,10 @@ impl Pool {
     }
 
     /// Submit multiple tasks and wait for all results.
-    pub async fn submit_all_and_wait(&mut self, tasks: Vec<Task>) -> anyhow::Result<Vec<WorkResult>> {
+    pub async fn submit_all_and_wait(
+        &mut self,
+        tasks: Vec<Task>,
+    ) -> anyhow::Result<Vec<WorkResult>> {
         let count = tasks.len();
         let mut result_rx = self.start()?;
 
@@ -209,7 +212,6 @@ mod tests {
                 context_keys: vec![],
                 share_as: None,
                 files_locked: vec![],
-                files_to_read: vec![],
                 parent_id: None,
                 chain_id: None,
                 chain_index: None,

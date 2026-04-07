@@ -14,7 +14,6 @@ fn parse_json_array(s: Option<&str>) -> Vec<String> {
 fn task_from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     let context_keys_raw: Option<String> = row.get("context_keys")?;
     let files_locked_raw: Option<String> = row.get("files_locked")?;
-    let files_to_read_raw: Option<String> = row.get("files_to_read")?;
     let status_raw: String = row.get("status")?;
     let provider_raw: String = row.get("provider")?;
 
@@ -33,7 +32,6 @@ fn task_from_row(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         context_keys: parse_json_array(context_keys_raw.as_deref()),
         share_as: row.get("share_as")?,
         files_locked: parse_json_array(files_locked_raw.as_deref()),
-        files_to_read: parse_json_array(files_to_read_raw.as_deref()),
         worker_id: row.get("worker_id")?,
         created_at: row.get("created_at")?,
         started_at: row.get("started_at")?,
@@ -50,11 +48,10 @@ pub fn create_task(conn: &Connection, new: &NewTask) -> rusqlite::Result<Task> {
     let id = ulid::Ulid::new().to_string();
     let context_keys_json = serde_json::to_string(&new.context_keys).unwrap_or_default();
     let files_locked_json = serde_json::to_string(&new.files_locked).unwrap_or_default();
-    let files_to_read_json = serde_json::to_string(&new.files_to_read).unwrap_or_default();
 
     conn.execute(
-        "INSERT INTO tasks (id, parent_id, chain_id, chain_index, model, provider, system_prompt, prompt, context_keys, share_as, files_locked, files_to_read)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO tasks (id, parent_id, chain_id, chain_index, model, provider, system_prompt, prompt, context_keys, share_as, files_locked)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             id,
             new.parent_id,
@@ -67,7 +64,6 @@ pub fn create_task(conn: &Connection, new: &NewTask) -> rusqlite::Result<Task> {
             context_keys_json,
             new.share_as,
             files_locked_json,
-            files_to_read_json,
         ],
     )?;
 
@@ -245,7 +241,6 @@ mod tests {
             context_keys: vec![],
             share_as: None,
             files_locked: vec![],
-            files_to_read: vec![],
             parent_id: None,
             chain_id: None,
             chain_index: None,

@@ -64,8 +64,10 @@ pub fn get_context_many(conn: &Connection, keys: &[String]) -> rusqlite::Result<
             placeholders.join(",")
         );
         let mut stmt = conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            chunk.iter().map(|k| k as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|k| k as &dyn rusqlite::types::ToSql)
+            .collect();
         let rows = stmt.query_map(params.as_slice(), context_from_row)?;
         for row in rows {
             all_entries.push(row?);

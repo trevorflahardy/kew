@@ -79,10 +79,10 @@ pub const MIGRATION_003_AGENT: &str = r#"
 ALTER TABLE tasks ADD COLUMN agent TEXT;
 "#;
 
-/// Migration 004: Add files_to_read column to tasks for auto file injection.
-pub const MIGRATION_004_FILES: &str = r#"
-ALTER TABLE tasks ADD COLUMN files_to_read TEXT;
-"#;
+/// Migration 004: formerly added files_to_read column (removed — agents now use
+/// on-demand tool calls instead of pre-injected file context). Kept as a no-op
+/// so the version sequence is unbroken for existing databases that already ran it.
+pub const MIGRATION_004_FILES: &str = "SELECT 1;";
 
 /// Migration 005: Add 'file' source type to embeddings for project indexing.
 ///
