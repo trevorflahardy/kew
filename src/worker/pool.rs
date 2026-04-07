@@ -218,6 +218,18 @@ impl SharedPool {
             .await
             .map_err(|_| anyhow::anyhow!("worker dropped reply before sending result"))
     }
+
+    /// Submit a task and return immediately without waiting for the result.
+    ///
+    /// The task runs in the background. Use `kew_wait` with the task ID, or
+    /// `kew_context_get` with the `share_as` key, to retrieve the result later.
+    pub async fn submit_bg(&self, task: Task) -> anyhow::Result<()> {
+        let (reply_tx, _reply_rx) = oneshot::channel(); // drop rx — fire and forget
+        self.task_tx
+            .send((task, reply_tx))
+            .await
+            .map_err(|_| anyhow::anyhow!("shared pool channel closed"))
+    }
 }
 
 #[cfg(test)]

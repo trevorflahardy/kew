@@ -270,6 +270,40 @@ struct ContextSearchResult {
     results: Vec<SearchResultItem>,
 }
 
+#[derive(Serialize, schemars::JsonSchema)]
+struct RunBgResult {
+    /// Task ID — pass to kew_wait to block until done, or use share_as + kew_context_get to retrieve the result.
+    task_id: String,
+    status: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct WaitParams {
+    /// Task IDs returned by kew_run_bg to wait for.
+    task_ids: Vec<String>,
+    /// How often to poll for completion, in milliseconds (default: 500).
+    #[serde(default = "default_poll_ms")]
+    poll_ms: u64,
+}
+
+fn default_poll_ms() -> u64 {
+    500
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+struct WaitTaskResult {
+    task_id: String,
+    status: String,
+    result: Option<String>,
+    error: Option<String>,
+    duration_ms: Option<i64>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+struct WaitResult {
+    results: Vec<WaitTaskResult>,
+}
+
 #[derive(Deserialize, schemars::JsonSchema)]
 struct StatusParams {}
 
@@ -372,6 +406,140 @@ impl KewMcpServer {
             error: work_result.result.as_ref().err().cloned(),
             duration_ms: work_result.stats.duration_ms,
         })
+    }
+
+    #[tool(
+        name = "kew_run_bg",
+        description = "Fire-and-forget: dispatch a task to a local LLM agent and return immediately without waiting.\n\nReturns a task_id. Use kew_wait to block until one or more background tasks finish, or kew_context_get with the share_as key to retrieve the result once it's ready.\n\nUse this for background auditors, parallel workstreams, and any task you want running while Claude continues other work. Same agent types and keyword auto-routing as kew_run."
+    )]
+    async fn run_bg(&self, Parameters(params): Parameters<RunParams>) -> Json<RunBgResult> {
+        let agent_name = params
+            .agent
+            .as_deref()
+            .or_else(|| detect_agent_from_prompt(&params.prompt));
+
+        let (effective_model, effective_system) = if let Some(name) = agent_name {
+            let project_dir = std::env::current_dir().ok();
+            match crate::agents::load_agent(name, project_dir.as_deref()) {
+                Ok(cfg) => {
+                    let model = cfg.model.unwrap_or_else(|| params.model.clone());
+                    let system = params.system.clone().or(Some(cfg.system_prompt));
+                    (model, system)
+                }
+                Err(_) => (params.model.clone(), params.system.clone()),
+            }
+        } else {
+            (params.model.clone(), params.system.clone())
+        };
+
+        let route = crate::llm::router::route(&effective_model);
+
+        let task = {
+            let conn = self.db.conn();
+            let new = crate::db::models::NewTask {
+                model: route.model.clone(),
+                provider: route.provider.clone(),
+                prompt: params.prompt,
+                system_prompt: effective_system,
+                context_keys: params
+                    .context
+                    .into_iter()
+                    .map(|k| format!("{}/{k}", project_namespace()))
+                    .collect(),
+                share_as: params
+                    .share_as
+                    .map(|k| format!("{}/{k}", project_namespace())),
+                files_locked: vec![],
+                parent_id: None,
+                chain_id: None,
+                chain_index: None,
+            };
+            let created = db::tasks::create_task(&conn, &new).unwrap();
+            if let Some(name) = agent_name {
+                db::tasks::set_task_agent(&conn, &created.id, name).ok();
+            }
+            db::tasks::claim_next_pending(&conn, "mcp-bg")
+                .unwrap()
+                .expect("just-created task should be claimable")
+        };
+
+        let task_id = task.id.clone();
+        match self.pool.submit_bg(task).await {
+            Ok(()) => Json(RunBgResult {
+                task_id,
+                status: "queued".into(),
+            }),
+            Err(e) => Json(RunBgResult {
+                task_id,
+                status: format!("error: {e}"),
+            }),
+        }
+    }
+
+    #[tool(
+        name = "kew_wait",
+        description = "Wait for one or more background tasks (launched with kew_run_bg) to finish.\n\nBlocks until every task in task_ids reaches a terminal state (done, failed, or cancelled), then returns all results in one response.\n\nTypical pattern:\n  id_a = kew_run_bg { agent: 'security', prompt: '...', share_as: 'sec/auth' }\n  id_b = kew_run_bg { agent: 'security', prompt: '...', share_as: 'sec/api' }\n  // ...do other work...\n  kew_wait { task_ids: [id_a, id_b] }  // block here to collect all results"
+    )]
+    async fn wait(&self, Parameters(params): Parameters<WaitParams>) -> Json<WaitResult> {
+        use crate::db::models::TaskStatus;
+        use std::collections::HashSet;
+        use tokio::time::{sleep, Duration};
+
+        let poll = Duration::from_millis(params.poll_ms.clamp(100, 5000));
+        let mut pending: HashSet<String> = params.task_ids.into_iter().collect();
+        let mut results: Vec<WaitTaskResult> = Vec::new();
+
+        loop {
+            // Scope the connection so the MutexGuard is dropped before the await.
+            {
+                let conn = self.db.conn();
+                pending.retain(|id| {
+                    match db::tasks::get_task(&conn, id) {
+                        Ok(Some(task)) => match task.status {
+                            TaskStatus::Done | TaskStatus::Failed | TaskStatus::Cancelled => {
+                                results.push(WaitTaskResult {
+                                    task_id: task.id,
+                                    status: task.status.to_string(),
+                                    result: task.result,
+                                    error: task.error,
+                                    duration_ms: task.duration_ms,
+                                });
+                                false // remove from pending
+                            }
+                            _ => true, // still running
+                        },
+                        // Unknown task ID — don't wait forever, report as error
+                        Ok(None) => {
+                            results.push(WaitTaskResult {
+                                task_id: id.clone(),
+                                status: "not_found".into(),
+                                result: None,
+                                error: Some("task ID not found in database".into()),
+                                duration_ms: None,
+                            });
+                            false
+                        }
+                        Err(e) => {
+                            results.push(WaitTaskResult {
+                                task_id: id.clone(),
+                                status: "error".into(),
+                                result: None,
+                                error: Some(e.to_string()),
+                                duration_ms: None,
+                            });
+                            false
+                        }
+                    }
+                });
+            } // conn (MutexGuard) dropped here, before the await below
+
+            if pending.is_empty() {
+                break;
+            }
+            sleep(poll).await;
+        }
+
+        Json(WaitResult { results })
     }
 
     #[tool(
@@ -678,11 +846,10 @@ mod tests {
         );
         assert!(names.contains(&"kew_status"), "missing kew_status");
         assert!(names.contains(&"kew_doctor"), "missing kew_doctor");
-        assert_eq!(tools.len(), 7);
-        assert!(
-            names.contains(&"kew_list_agents"),
-            "missing kew_list_agents"
-        );
+        assert_eq!(tools.len(), 9);
+        assert!(names.contains(&"kew_list_agents"), "missing kew_list_agents");
+        assert!(names.contains(&"kew_run_bg"), "missing kew_run_bg");
+        assert!(names.contains(&"kew_wait"), "missing kew_wait");
     }
 
     #[tokio::test]
