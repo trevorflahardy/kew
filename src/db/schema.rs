@@ -105,6 +105,17 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type);
 PRAGMA foreign_keys = ON;
 "#;
 
+/// Migration 006: Append-only log chunks for live task output streaming.
+pub const MIGRATION_006_TASK_LOGS: &str = r#"
+CREATE TABLE IF NOT EXISTS task_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    chunk TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_logs_task ON task_logs(task_id, id);
+"#;
+
 /// All migrations in order.
 pub const MIGRATIONS: &[(&str, i64)] = &[
     (MIGRATION_001_CORE, 1),
@@ -112,4 +123,5 @@ pub const MIGRATIONS: &[(&str, i64)] = &[
     (MIGRATION_003_AGENT, 3),
     (MIGRATION_004_FILES, 4),
     (MIGRATION_005_FILE_EMBEDDINGS, 5),
+    (MIGRATION_006_TASK_LOGS, 6),
 ];

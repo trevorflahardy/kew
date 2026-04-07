@@ -199,6 +199,20 @@ impl Worker {
                         let tool_calls = response.message.tool_calls.as_ref().unwrap();
                         debug!(count = tool_calls.len(), iteration, "executing tool calls");
 
+                        // Log which tools are being called
+                        {
+                            let names: Vec<&str> = tool_calls
+                                .iter()
+                                .map(|tc| tc.function.name.as_str())
+                                .collect();
+                            let conn = self.db.conn();
+                            let _ = db::task_logs::append_chunk(
+                                &conn,
+                                &task.id,
+                                &format!("[step {}] → {}", iteration + 1, names.join(", ")),
+                            );
+                        }
+
                         // Append the assistant's tool-call message to the conversation
                         messages.push(response.message.clone());
 
@@ -210,6 +224,20 @@ impl Worker {
                                 result_len = result.len(),
                                 "tool executed"
                             );
+                            // Log a truncated view of the tool result
+                            {
+                                let preview = if result.len() > 400 {
+                                    format!("{}…", &result[..400])
+                                } else {
+                                    result.clone()
+                                };
+                                let conn = self.db.conn();
+                                let _ = db::task_logs::append_chunk(
+                                    &conn,
+                                    &task.id,
+                                    &format!("    ← {}: {}", tc.function.name, preview),
+                                );
+                            }
                             messages.push(ChatMessage::tool_result(&tc.function.name, result));
                         }
                         // Continue loop — send updated conversation back to LLM

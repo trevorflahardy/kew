@@ -168,6 +168,15 @@ pub fn set_task_agent(conn: &Connection, task_id: &str, agent: &str) -> rusqlite
     )
 }
 
+/// Cancel a task that is pending, assigned, or running.
+pub fn cancel_task(conn: &Connection, task_id: &str) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE tasks SET status = 'cancelled', completed_at = unixepoch('now') \
+         WHERE id = ?1 AND status IN ('pending', 'assigned', 'running')",
+        params![task_id],
+    )
+}
+
 /// Return the distinct agent names for tasks currently assigned or running.
 pub fn running_agents(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(

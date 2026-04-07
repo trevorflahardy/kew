@@ -209,7 +209,6 @@ kew exposes all tools over stdio MCP. After `kew init`, `.mcp.json` is written a
 | `kew_context_get`    | Read a shared context entry by key                               |
 | `kew_context_set`    | Write a shared context entry                                     |
 | `kew_context_search` | Vector similarity search over stored knowledge                   |
-| `kew_read_file`      | Read a project file (path-traversal safe, 200 KB cap)            |
 | `kew_status`         | Task counts, context entries, embedding stats                    |
 | `kew_doctor`         | Health check — Ollama reachable, models available, DB ok         |
 | `kew_list_agents`    | List available agents with keyword hints                         |

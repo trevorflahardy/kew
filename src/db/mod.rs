@@ -8,6 +8,7 @@ pub mod context;
 pub mod locks;
 pub mod models;
 pub mod schema;
+pub mod task_logs;
 pub mod tasks;
 pub mod vectors;
 
@@ -167,6 +168,6 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 }

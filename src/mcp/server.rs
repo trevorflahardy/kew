@@ -328,8 +328,14 @@ impl KewMcpServer {
                 provider: route.provider.clone(),
                 prompt: params.prompt,
                 system_prompt: effective_system,
-                context_keys: params.context,
-                share_as: params.share_as,
+                context_keys: params
+                    .context
+                    .into_iter()
+                    .map(|k| format!("{}/{k}", project_namespace()))
+                    .collect(),
+                share_as: params
+                    .share_as
+                    .map(|k| format!("{}/{k}", project_namespace())),
                 files_locked: vec![],
                 parent_id: None,
                 chain_id: None,
@@ -800,12 +806,12 @@ mod tests {
         let Json(run_result) = server.run(Parameters(params)).await;
         assert_eq!(run_result.status, "done");
 
-        // The worker's share_as stores the key without any MCP namespace prefix —
-        // this is intentional (internal task plumbing bypasses project isolation).
-        // Verify the raw DB entry exists directly.
+        // share_as keys are namespaced with the project prefix so they round-trip
+        // correctly through kew_context_get.
+        let namespaced = format!("{}/output-key", project_namespace());
         let conn = server.db.conn();
-        let entry = db::context::get_context(&conn, "output-key").unwrap();
-        assert!(entry.is_some());
+        let entry = db::context::get_context(&conn, &namespaced).unwrap();
+        assert!(entry.is_some(), "namespaced key not found in context");
         assert_eq!(entry.unwrap().content, "shared result");
     }
 
