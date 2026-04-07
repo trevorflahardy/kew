@@ -1,2 +1,10 @@
 /target
 .kew/
+agents/
+
+# Rust related
+/target
+**/*.rs.bk
+**/*.rs.bk.*
+**/Cargo.lock
+**/Cargo.toml.*
