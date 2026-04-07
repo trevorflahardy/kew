@@ -339,11 +339,31 @@ fn render_list(frame: &mut Frame, app: &mut App) {
 
     // Task table
     let header = Row::new(vec![
-        Cell::from("ID").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Status").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Agent").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Dur").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Cell::from("Prompt").style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Cell::from("ID").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Status").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Agent").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Dur").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Prompt").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]);
 
     let rows: Vec<Row> = app
@@ -408,9 +428,8 @@ fn render_list(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(table, chunks[1], &mut app.list_state);
 
     // Footer
-    let footer =
-        Paragraph::new(" ↑/↓ navigate  Enter open  q quit  │  refreshes every 0.5s")
-            .style(Style::default().fg(Color::DarkGray));
+    let footer = Paragraph::new(" ↑/↓ navigate  Enter open  q quit  │  refreshes every 0.5s")
+        .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(footer, chunks[2]);
 }
 
@@ -421,9 +440,9 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),  // task header
-            Constraint::Min(5),     // log / output
-            Constraint::Length(1),  // footer
+            Constraint::Length(6), // task header
+            Constraint::Min(5),    // log / output
+            Constraint::Length(1), // footer
         ])
         .split(area);
 
@@ -454,7 +473,11 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
         })
         .unwrap_or_else(|| "in progress".into());
 
-    let tokens_per_sec_str = match (detail.duration_ms, detail.prompt_tokens, detail.completion_tokens) {
+    let tokens_per_sec_str = match (
+        detail.duration_ms,
+        detail.prompt_tokens,
+        detail.completion_tokens,
+    ) {
         (Some(d), Some(p), Some(c)) if d > 0 => {
             let total = (p + c) as f64;
             let secs = d as f64 / 1000.0;
@@ -471,7 +494,12 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
         Line::from({
             let mut spans = vec![
                 Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&detail.status, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    &detail.status,
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled("   Model: ", Style::default().fg(Color::DarkGray)),
                 Span::raw(&detail.model),
                 Span::styled("   Agent: ", Style::default().fg(Color::DarkGray)),
@@ -480,18 +508,23 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
                 Span::raw(&duration_str),
             ];
             if let Some(ref tps) = tokens_per_sec_str {
-                spans.push(Span::styled("   Speed: ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    "   Speed: ",
+                    Style::default().fg(Color::DarkGray),
+                ));
                 spans.push(Span::styled(tps.as_str(), Style::default().fg(Color::Cyan)));
             }
             spans
         }),
         Line::from(vec![
             Span::styled("  Prompt: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(if detail.prompt.len() > (area.width as usize).saturating_sub(12) {
-                &detail.prompt[..area.width as usize - 12]
-            } else {
-                &detail.prompt
-            }),
+            Span::raw(
+                if detail.prompt.len() > (area.width as usize).saturating_sub(12) {
+                    &detail.prompt[..area.width as usize - 12]
+                } else {
+                    &detail.prompt
+                },
+            ),
         ]),
     ];
 
@@ -529,7 +562,9 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "── result ──",
-                Style::default().fg(Color::Green).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::DIM),
             )));
         }
         for l in result.lines() {
@@ -544,7 +579,10 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
             Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
         )));
         for l in error.lines() {
-            lines.push(Line::from(Span::styled(l.to_string(), Style::default().fg(Color::Red))));
+            lines.push(Line::from(Span::styled(
+                l.to_string(),
+                Style::default().fg(Color::Red),
+            )));
         }
     }
 
@@ -557,7 +595,11 @@ fn render_detail(frame: &mut Frame, app: &mut App) {
         app.log_scroll = scroll as usize;
     }
 
-    let auto_indicator = if app.auto_scroll { " [follow]" } else { " [↑/↓ scroll]" };
+    let auto_indicator = if app.auto_scroll {
+        " [follow]"
+    } else {
+        " [↑/↓ scroll]"
+    };
     let log_title = format!(" Output{auto_indicator} ");
 
     let log_widget = Paragraph::new(lines)

@@ -105,7 +105,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let cfg = KewConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.workers(4), 4);
-        assert_eq!(cfg.ollama_url("http://localhost:11434"), "http://localhost:11434");
+        assert_eq!(
+            cfg.ollama_url("http://localhost:11434"),
+            "http://localhost:11434"
+        );
     }
 
     #[test]
@@ -127,7 +130,10 @@ ollama:
 
         let cfg = KewConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.workers(4), 8);
-        assert_eq!(cfg.ollama_url("http://localhost:11434"), "http://myhost:11434");
+        assert_eq!(
+            cfg.ollama_url("http://localhost:11434"),
+            "http://myhost:11434"
+        );
         assert_eq!(cfg.model("default"), "gemma4:26b");
     }
 
@@ -143,7 +149,10 @@ ollama:
         let cfg = KewConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.workers(4), 2);
         // ollama.url not set — falls back
-        assert_eq!(cfg.ollama_url("http://localhost:11434"), "http://localhost:11434");
+        assert_eq!(
+            cfg.ollama_url("http://localhost:11434"),
+            "http://localhost:11434"
+        );
     }
 
     #[test]

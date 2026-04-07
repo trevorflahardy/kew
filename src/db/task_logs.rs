@@ -16,9 +16,8 @@ pub fn append_chunk(conn: &Connection, task_id: &str, chunk: &str) -> rusqlite::
 
 /// Fetch all log chunks for a task in insertion order.
 pub fn get_chunks(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT chunk FROM task_logs WHERE task_id = ?1 ORDER BY id ASC",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT chunk FROM task_logs WHERE task_id = ?1 ORDER BY id ASC")?;
     let rows = stmt.query_map(params![task_id], |row| row.get(0))?;
     rows.collect()
 }

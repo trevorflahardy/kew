@@ -1,6 +1,6 @@
 [package]
 name = "kew"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Real local agent orchestration"
 license = "MIT"
@@ -58,7 +58,11 @@ ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
 
 # MCP server
-rmcp = { version = "1", features = ["server", "transport-io", "macros"], optional = true }
+rmcp = { version = "1", features = [
+    "server",
+    "transport-io",
+    "macros",
+], optional = true }
 schemars = { version = "0.8", optional = true }
 
 # Vector search

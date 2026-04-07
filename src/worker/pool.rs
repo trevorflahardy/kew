@@ -170,8 +170,7 @@ impl SharedPool {
         claude: Option<Arc<dyn LlmClient>>,
         size: usize,
     ) -> Self {
-        let (task_tx, task_rx) =
-            mpsc::channel::<(Task, oneshot::Sender<WorkResult>)>(size * 16);
+        let (task_tx, task_rx) = mpsc::channel::<(Task, oneshot::Sender<WorkResult>)>(size * 16);
         let task_rx = Arc::new(tokio::sync::Mutex::new(task_rx));
 
         for i in 0..size {

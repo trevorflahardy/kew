@@ -1,0 +1,230 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          USE_CROSS: ${{ matrix.cross }}
+        run: |
+          if [ "$USE_CROSS" = "true" ]; then
+            cross build --release --target "$BUILD_TARGET"
+          else
+            cargo build --release --target "$BUILD_TARGET"
+          fi
+        shell: bash
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cd "target/${BUILD_TARGET}/release"
+          tar czf "../../../kew-${BUILD_TARGET}.tar.gz" kew
+        shell: bash
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cd "target/${BUILD_TARGET}/release"
+          7z a "../../../kew-${BUILD_TARGET}.zip" kew.exe
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kew-${{ matrix.target }}
+          path: kew-${{ matrix.target }}.${{ matrix.archive }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Compute SHA256 hashes
+        working-directory: artifacts
+        run: |
+          for f in kew-*.tar.gz kew-*.zip; do
+            [ -f "$f" ] && sha256sum "$f"
+          done | tee sha256sums.txt
+
+      - name: Update Homebrew formula
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+
+          SHA_AARCH64_DARWIN=$(grep "aarch64-apple-darwin" artifacts/sha256sums.txt | awk '{print $1}')
+          SHA_X86_64_DARWIN=$(grep "x86_64-apple-darwin" artifacts/sha256sums.txt | awk '{print $1}')
+          SHA_AARCH64_LINUX=$(grep "aarch64-unknown-linux-gnu" artifacts/sha256sums.txt | awk '{print $1}')
+          SHA_X86_64_LINUX=$(grep "x86_64-unknown-linux-gnu" artifacts/sha256sums.txt | awk '{print $1}')
+
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" HomebrewFormula/kew.rb
+          sed -i "s/SHA256_AARCH64_DARWIN/${SHA_AARCH64_DARWIN}/g" HomebrewFormula/kew.rb
+          sed -i "s/SHA256_X86_64_DARWIN/${SHA_X86_64_DARWIN}/g" HomebrewFormula/kew.rb
+          sed -i "s/SHA256_AARCH64_LINUX/${SHA_AARCH64_LINUX}/g" HomebrewFormula/kew.rb
+          sed -i "s/SHA256_X86_64_LINUX/${SHA_X86_64_LINUX}/g" HomebrewFormula/kew.rb
+
+          cat HomebrewFormula/kew.rb
+
+      - name: Commit updated formula
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add HomebrewFormula/kew.rb
+          git commit -m "chore: update Homebrew formula for ${RELEASE_TAG}" || true
+          git push origin master
+
+      - name: Generate install script
+        run: |
+          cat > artifacts/install.sh << 'SCRIPT'
+          #!/bin/sh
+          set -eu
+
+          REPO="trevorflahardy/kew"
+          BINARY="kew"
+
+          get_arch() {
+            arch=$(uname -m)
+            case "$arch" in
+              x86_64|amd64) echo "x86_64" ;;
+              arm64|aarch64) echo "aarch64" ;;
+              *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
+            esac
+          }
+
+          get_os() {
+            os=$(uname -s)
+            case "$os" in
+              Linux) echo "unknown-linux-gnu" ;;
+              Darwin) echo "apple-darwin" ;;
+              *) echo "Unsupported OS: $os" >&2; exit 1 ;;
+            esac
+          }
+
+          ARCH=$(get_arch)
+          OS=$(get_os)
+          TARGET="${ARCH}-${OS}"
+
+          VERSION=$(curl -sI "https://github.com/${REPO}/releases/latest" | grep -i location | sed 's/.*tag\///' | tr -d '\r\n')
+          URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY}-${TARGET}.tar.gz"
+
+          INSTALL_DIR="${HOME}/.local/bin"
+          mkdir -p "$INSTALL_DIR"
+
+          echo "Downloading ${BINARY} ${VERSION} for ${TARGET}..."
+          curl -sL "$URL" | tar xz -C "$INSTALL_DIR"
+          chmod +x "${INSTALL_DIR}/${BINARY}"
+
+          if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+            echo ""
+            echo "Add to your PATH:"
+            echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
+          fi
+
+          echo "Installed ${BINARY} to ${INSTALL_DIR}/${BINARY}"
+          SCRIPT
+          chmod +x artifacts/install.sh
+
+      - name: Generate Windows install script
+        run: |
+          cat > artifacts/install.ps1 << 'SCRIPT'
+          $ErrorActionPreference = "Stop"
+          $repo = "trevorflahardy/kew"
+          $binary = "kew"
+
+          $arch = if ([Environment]::Is64BitOperatingSystem) {
+              if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "aarch64" } else { "x86_64" }
+          } else { throw "32-bit not supported" }
+
+          $target = "$arch-pc-windows-msvc"
+          $installDir = "$env:LOCALAPPDATA\kew\bin"
+
+          $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
+          $version = $release.tag_name
+          $url = "https://github.com/$repo/releases/download/$version/$binary-$target.zip"
+
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+          $zip = "$env:TEMP\kew.zip"
+
+          Write-Host "Downloading $binary $version for $target..."
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $installDir -Force
+          Remove-Item $zip
+
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          if ($userPath -notlike "*$installDir*") {
+              [Environment]::SetEnvironmentVariable("Path", "$userPath;$installDir", "User")
+              Write-Host "Added $installDir to user PATH (restart your terminal)"
+          }
+
+          Write-Host "Installed $binary to $installDir\$binary.exe"
+          SCRIPT
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --title "$RELEASE_TAG" \
+            --generate-notes \
+            artifacts/*

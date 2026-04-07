@@ -813,7 +813,6 @@ mod tests {
             tool_router,
             pool,
         }
-
     }
 
     #[tokio::test]
@@ -847,7 +846,10 @@ mod tests {
         assert!(names.contains(&"kew_status"), "missing kew_status");
         assert!(names.contains(&"kew_doctor"), "missing kew_doctor");
         assert_eq!(tools.len(), 9);
-        assert!(names.contains(&"kew_list_agents"), "missing kew_list_agents");
+        assert!(
+            names.contains(&"kew_list_agents"),
+            "missing kew_list_agents"
+        );
         assert!(names.contains(&"kew_run_bg"), "missing kew_run_bg");
         assert!(names.contains(&"kew_wait"), "missing kew_wait");
     }

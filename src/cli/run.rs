@@ -316,7 +316,11 @@ pub async fn execute(
             Ok(Ok(work_result)) => match work_result.result {
                 Ok(text) => {
                     if args.json {
-                        let tokens_per_sec = match (work_result.stats.duration_ms, work_result.stats.prompt_tokens, work_result.stats.completion_tokens) {
+                        let tokens_per_sec = match (
+                            work_result.stats.duration_ms,
+                            work_result.stats.prompt_tokens,
+                            work_result.stats.completion_tokens,
+                        ) {
                             (Some(d), Some(p), Some(c)) if d > 0 => {
                                 Some((p + c) as f64 / (d as f64 / 1000.0))
                             }
