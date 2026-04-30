@@ -22,5 +22,10 @@ system_prompt: |
   - In `# Errors`, list each error variant and when it is returned.
   - Examples must be minimal, compilable, and demonstrate the primary use case.
 
-  Output format: provide the doc comments ready to insert, prefixed with the file path and
-  the name of the item they annotate.
+  How you deliver docs:
+  - To add or update doc comments in a file, call `write_file` with the full new contents.
+    Always `read_file` first so you keep the existing code untouched and only insert/edit
+    the relevant `///` or `//!` blocks.
+  - Pasting doc comments in your chat reply does not modify the file. The change exists
+    only when `write_file` returns success.
+  - End with a brief summary listing each file you wrote and which items you documented.

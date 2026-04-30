@@ -26,6 +26,29 @@ use crate::db::{self, Database};
 use crate::llm::{ChatMessage, ChatRequest, CompletionStats, LlmClient, LlmError};
 use crate::worker::tools::{ToolSandbox, MAX_TOOL_ITERATIONS};
 
+/// Preamble prepended to every agent's system prompt. Tells the LLM what tools
+/// are available and — critically — that pasting code in chat does NOT modify
+/// files. Without this, smaller open-weight models (gemma4, etc.) tend to emit
+/// diffs as text instead of calling write_file.
+const TOOL_PREAMBLE: &str = "\
+You have access to sandboxed tools that operate on the current project root. \
+Call them via the standard tool-call mechanism — never paste tool invocations \
+into your chat response.
+
+Available tools:
+- read_file(path, [start_line], [end_line]) — read a file with line numbers (max 100 KB per call).
+- list_dir([path]) — list directory contents (defaults to project root).
+- grep(pattern, [path], [glob], [max_results]) — regex search across files.
+- write_file(path, content) — create or overwrite a file (creates parent dirs, max 1 MB).
+
+Rules for using these tools:
+- Prefer read_file / grep / list_dir over guessing. Read a file before you modify it.
+- To CHANGE a file in the project, you MUST call write_file. Pasting code in your \
+reply does NOT modify the file on disk — that is the single most common mistake.
+- After tool calls return, decide whether you need more information or can give a \
+final answer. Keep the final text response brief: summarize what you did and why, \
+do not re-paste the full file you just wrote.";
+
 /// Result of a single task execution.
 #[derive(Debug, Clone)]
 pub struct WorkResult {
@@ -107,10 +130,13 @@ impl Worker {
         // 3. Build messages array
         let mut messages = Vec::new();
 
-        // System prompt first
-        if let Some(ref sys) = task.system_prompt {
-            messages.push(ChatMessage::text("system", sys.clone()));
-        }
+        // System prompt first — always prepend the tool preamble so every agent
+        // (and tasks with no agent at all) knows the tool surface.
+        let combined_system = match task.system_prompt.as_deref() {
+            Some(sys) => format!("{TOOL_PREAMBLE}\n\n{sys}"),
+            None => TOOL_PREAMBLE.to_string(),
+        };
+        messages.push(ChatMessage::text("system", combined_system));
 
         // Inject context as user messages
         for entry in &context_entries {
@@ -181,6 +207,17 @@ impl Worker {
         for iteration in 0..MAX_TOOL_ITERATIONS {
             debug!(iteration, "agentic loop iteration");
 
+            // Surface a "thinking" marker BEFORE the await so the TUI doesn't
+            // appear frozen while a slow local model generates.
+            {
+                let conn = self.db.conn();
+                let _ = db::task_logs::append_chunk(
+                    &conn,
+                    &task.id,
+                    &format!("[step {}] thinking…", iteration + 1),
+                );
+            }
+
             let chat_req = ChatRequest {
                 model: task.model.clone(),
                 messages: messages.clone(),
@@ -198,6 +235,24 @@ impl Worker {
                         // Model wants to call tools — execute them and continue
                         let tool_calls = response.message.tool_calls.as_ref().unwrap();
                         debug!(count = tool_calls.len(), iteration, "executing tool calls");
+
+                        // Log the model's reasoning content (if any) before its tool calls.
+                        // Many models emit a short rationale alongside tool_calls; surfacing
+                        // it makes it obvious the model is making progress.
+                        let reasoning = response.message.content.trim();
+                        if !reasoning.is_empty() {
+                            let preview = if reasoning.len() > 800 {
+                                format!("{}…", &reasoning[..800])
+                            } else {
+                                reasoning.to_string()
+                            };
+                            let conn = self.db.conn();
+                            let _ = db::task_logs::append_chunk(
+                                &conn,
+                                &task.id,
+                                &format!("    reasoning: {preview}"),
+                            );
+                        }
 
                         // Log which tools are being called
                         {

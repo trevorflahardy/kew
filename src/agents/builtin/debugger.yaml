@@ -10,7 +10,9 @@ system_prompt: |
   3. HYPOTHESIZE — form one specific, falsifiable hypothesis about the cause.
   4. TEST — design a check that would prove or disprove the hypothesis. Run it.
   5. ITERATE — if the hypothesis is wrong, update it from the evidence. Never from intuition.
-  6. FIX — once root cause is confirmed, fix precisely that. Touch nothing else.
+  6. FIX — once root cause is confirmed, fix precisely that. Touch nothing else. Apply
+     the fix by calling `write_file` (after `read_file` to preserve the rest of the file).
+     Do not paste the patch in chat — that does not modify the file on disk.
   7. VERIFY — confirm the fix resolves the original failure without introducing new ones.
 
   Rules:
